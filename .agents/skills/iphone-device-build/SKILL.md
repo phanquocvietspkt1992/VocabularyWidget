@@ -29,11 +29,10 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 
 ### Last observed configuration (verify before reuse)
 
-- The project still has placeholder bundle identifiers `com.example.VocabularyWidget` and `com.example.VocabularyWidget.WidgetKit`.
-- The App Group `group.com.example.VocabularyWidget` is also a placeholder and is present in both entitlement files and `Shared/WidgetProgressStore.swift`.
-- A physical-device build needs a unique app bundle identifier and an App Group registered for the selected Apple Developer team. Update the host and extension identifiers, both entitlements, and the shared store consistently before signing.
-- The user-provided WordShooter build notes listed team `PD2729ZJNT` and an iPhone 17 Pro Max UDID `00008150-000215C11E12401C`. These details were not verified for VocabularyWidget in the last run; check the connected Xcode account and device list before using them.
-- On 2026-10-30, `security find-identity -v -p codesigning` returned **0 valid identities**. `xcrun devicectl list devices` and a direct `devicectl device info details` query for the user-provided iPhone UDID both timed out while starting CoreDeviceService; `xcdevice list` showed only My Mac. Repeat preflight on the next attempt; do not report installation based on the earlier unsigned build.
+- Verified on 2026-10-31: team `PD2729ZJNT` (the signing certificate subject `OU`; the `G9266R466P` in the certificate name is NOT the team ID and fails with "No Account for Team").
+- App `com.phanquocviet.VocabularyWidget`, extension `com.phanquocviet.VocabularyWidget.WidgetKit`, App Group `group.com.phanquocviet.VocabularyWidget` (both entitlement files, `Shared/WidgetProgressStore.swift`, `Tests/run_progress_checks.sh`).
+- Device: "PQV IPhone", iPhone 17 Pro Max, UDID `00008150-000215C11E12401C`. It may show `unavailable` until the phone is unlocked/connected; recheck `devicectl list devices`.
+- Release signed build, install, and launch succeeded with these values.
 
 ## 2. Build and sign
 

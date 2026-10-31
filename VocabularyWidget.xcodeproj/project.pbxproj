@@ -15,6 +15,8 @@
 		A10000000000000000000006 /* Shared/VocabularyData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* Shared/VocabularyData.swift */; };
 		A10000000000000000000007 /* Shared/WidgetProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* Shared/WidgetProgressStore.swift */; };
 		A10000000000000000000008 /* VocabularyWidgetExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* VocabularyWidgetExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A10000000000000000000009 /* Shared/PronunciationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* Shared/PronunciationIntent.swift */; };
+		A1000000000000000000000A /* Shared/PronunciationIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* Shared/PronunciationIntent.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,6 +54,7 @@
 		A20000000000000000000008 /* Widget/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Widget/Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000009 /* VocabularyWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VocabularyWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000000000000000000000A /* VocabularyWidgetApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VocabularyWidgetApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000B /* Shared/PronunciationIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/PronunciationIntent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +100,7 @@
 			children = (
 				A20000000000000000000003 /* Shared/VocabularyData.swift */,
 				A20000000000000000000004 /* Shared/WidgetProgressStore.swift */,
+				A2000000000000000000000B /* Shared/PronunciationIntent.swift */,
 			);
 			name = Shared;
 			sourceTree = "<group>";
@@ -202,6 +206,7 @@
 				A10000000000000000000002 /* App/TopicPickerView.swift in Sources */,
 				A10000000000000000000003 /* Shared/VocabularyData.swift in Sources */,
 				A10000000000000000000004 /* Shared/WidgetProgressStore.swift in Sources */,
+				A10000000000000000000009 /* Shared/PronunciationIntent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -212,6 +217,7 @@
 				A10000000000000000000005 /* Widget/VocabularyWidget.swift in Sources */,
 				A10000000000000000000006 /* Shared/VocabularyData.swift in Sources */,
 				A10000000000000000000007 /* Shared/WidgetProgressStore.swift in Sources */,
+				A1000000000000000000000A /* Shared/PronunciationIntent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -258,11 +264,13 @@
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Từ vựng mỗi ngày";
+				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.VocabularyWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.phanquocviet.VocabularyWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APP_PROCESS_DIAGNOSTICS";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -276,11 +284,13 @@
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Từ vựng mỗi ngày";
+				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.VocabularyWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.phanquocviet.VocabularyWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APP_PROCESS_DIAGNOSTICS";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -297,7 +307,7 @@
 				INFOPLIST_FILE = Widget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.VocabularyWidget.WidgetKit;
+				PRODUCT_BUNDLE_IDENTIFIER = com.phanquocviet.VocabularyWidget.WidgetKit;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -317,7 +327,7 @@
 				INFOPLIST_FILE = Widget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.VocabularyWidget.WidgetKit;
+				PRODUCT_BUNDLE_IDENTIFIER = com.phanquocviet.VocabularyWidget.WidgetKit;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;

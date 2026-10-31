@@ -27,8 +27,8 @@ Build a simple native iPhone app with a Home Screen widget that helps the user l
 - Topics currently bundled in `Shared/VocabularyData.swift`: five IT/work topics and the three original general topics, 50 entries each.
 - Progress is stored per topic using the shared App Group defaults in `Shared/WidgetProgressStore.swift`.
 - The app lets the user select a topic, displays its current word and an approximate time-to-change, and offers a confirmed reset for each topic.
-- The widget has a next-word action. The widget timeline is scheduled five minutes apart, subject to iOS refresh behavior.
-- App Group identifier is still the placeholder `group.com.example.VocabularyWidget`; it must be replaced with an identifier registered for the user's Apple Developer team before signing for a physical device.
+- The widget has a next-word action and a **Đã học** action. Marking studied records the topic, displayed word text, local day, and tap time in versioned App Group defaults history; it advances and restarts the five-minute interval. History is deduplicated per topic/word/local day and is not removed by progress reset. The widget timeline is scheduled five minutes apart, subject to iOS refresh behavior.
+- Bundle ID `com.phanquocviet.VocabularyWidget` (+ `.WidgetKit`), App Group `group.com.phanquocviet.VocabularyWidget`, team `PD2729ZJNT`; installed and launched on the user's iPhone on 2026-10-31.
 
 ## Verification and limits previously observed
 

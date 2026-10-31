@@ -64,10 +64,19 @@ private struct VocabularyWidgetView: View {
                         .accessibilityLabel("Từ \(entry.position) trên \(entry.total)")
                 }
             }
-            Text(word.text)
-                .font(family == .systemSmall ? .title2.bold() : .title.bold())
-                .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
-                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 6) {
+                Text(word.text)
+                    .font(family == .systemSmall ? .title2.bold() : .title.bold())
+                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Button(intent: SpeakWordIntent(word: word.text)) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(family == .systemSmall ? .caption : .body)
+                        .foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
+                }
+                .accessibilityLabel("Phát âm \(word.text)")
+            }
             Text("\(word.partOfSpeech)  \(word.meaning)")
                 .font(family == .systemSmall ? .subheadline : .headline)
                 .foregroundStyle(Color(red: 0.72, green: 0.87, blue: 1))
@@ -81,6 +90,11 @@ private struct VocabularyWidgetView: View {
             HStack {
                 Spacer(minLength: 0)
                 if family == .systemSmall {
+                    Button(intent: StudiedWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.title3).foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
+                    }
+                    .accessibilityLabel("Đã học")
                     Button(intent: NextWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
                         Image(systemName: "arrow.right.circle.fill")
                             .font(.title3).foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
@@ -89,6 +103,11 @@ private struct VocabularyWidgetView: View {
                 } else {
                     Button(intent: NextWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
                         Label("Từ tiếp theo", systemImage: "arrow.right.circle.fill")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .tint(Color(red: 0.58, green: 0.84, blue: 1))
+                    Button(intent: StudiedWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
+                        Label("Đã học", systemImage: "checkmark.circle.fill")
                     }
                     .font(.caption.weight(.semibold))
                     .tint(Color(red: 0.58, green: 0.84, blue: 1))
@@ -126,6 +145,25 @@ struct NextWordIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         WidgetProgressStore.advanceDisplayedWord(topicID: topicID, displayedIndex: displayedIndex)
+        WidgetCenter.shared.reloadTimelines(ofKind: "VocabularyWidget")
+        return .result()
+    }
+}
+
+struct StudiedWordIntent: AppIntent {
+    static var title: LocalizedStringResource = "Đã học"
+    @Parameter(title: "Chủ đề") var topicID: String
+    @Parameter(title: "Vị trí từ đang hiển thị") var displayedIndex: Int
+
+    init() {}
+
+    init(topicID: String, displayedIndex: Int) {
+        self.topicID = topicID
+        self.displayedIndex = displayedIndex
+    }
+
+    func perform() async throws -> some IntentResult {
+        WidgetProgressStore.markStudiedAndAdvance(topicID: topicID, displayedIndex: displayedIndex)
         WidgetCenter.shared.reloadTimelines(ofKind: "VocabularyWidget")
         return .result()
     }

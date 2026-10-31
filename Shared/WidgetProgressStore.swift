@@ -1,9 +1,17 @@
 import Foundation
 
+struct StudyHistoryRecord: Codable, Equatable {
+    let topicID: String
+    let wordID: String
+    let day: String
+    let studiedAt: Date
+}
+
 enum WidgetProgressStore {
-    static let appGroupID = "group.com.example.VocabularyWidget"
+    static let appGroupID = "group.com.phanquocviet.VocabularyWidget"
     static let interval: TimeInterval = 5 * 60
     private static let selectedKey = "selectedTopic"
+    private static let studyHistoryKey = "studyHistory.v1"
     static var testDefaults: UserDefaults?
 
     private static var defaults: UserDefaults {
@@ -100,6 +108,70 @@ enum WidgetProgressStore {
         defaults.set(date, forKey: anchorKey(topic.id))
         defaults.set(true, forKey: visitedKey(topic.id))
         return true
+    }
+
+    @discardableResult
+    static func markStudiedAndAdvance(
+        topicID: String,
+        displayedIndex: Int,
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard selectedTopicID == topicID,
+              let topic = VocabularyCatalog.topics.first(where: { $0.id == topicID }),
+              !topic.words.isEmpty,
+              topic.words.indices.contains(displayedIndex) else { return false }
+
+        let nextIndex = (displayedIndex + 1) % topic.words.count
+        let wordID = topic.words[displayedIndex].text
+        let day = dayKey(for: date, calendar: calendar)
+        var records: [StudyHistoryRecord] = []
+        if let storedHistory = defaults.object(forKey: studyHistoryKey) {
+            guard let data = storedHistory as? Data,
+                  let decoded = try? JSONDecoder().decode([StudyHistoryRecord].self, from: data) else { return false }
+            records = decoded
+        }
+        if !records.contains(where: { $0.topicID == topicID && $0.wordID == wordID && $0.day == day }) {
+            records.append(StudyHistoryRecord(topicID: topicID, wordID: wordID, day: day, studiedAt: date))
+            guard let data = try? JSONEncoder().encode(records) else { return false }
+            defaults.set(data, forKey: studyHistoryKey)
+        }
+
+        defaults.set(nextIndex, forKey: indexKey(topic.id))
+        defaults.set(date, forKey: anchorKey(topic.id))
+        defaults.set(true, forKey: visitedKey(topic.id))
+        return true
+    }
+
+    static func allStudyHistory() -> [StudyHistoryRecord] {
+        guard let data = defaults.data(forKey: studyHistoryKey),
+              let records = try? JSONDecoder().decode([StudyHistoryRecord].self, from: data) else { return [] }
+        return records
+    }
+
+    static func studiedWordIDs(for topicID: String) -> Set<String> {
+        Set(allStudyHistory().lazy.filter { $0.topicID == topicID }.map(\.wordID))
+    }
+
+    static func studiedWordCount(for topicID: String) -> Int {
+        studiedWordIDs(for: topicID).count
+    }
+
+    static func studyHistory(forDay day: String) -> [StudyHistoryRecord] {
+        allStudyHistory().filter { $0.day == day }
+    }
+
+    static func studyHistory(from startDate: Date, through endDate: Date) -> [StudyHistoryRecord] {
+        guard startDate <= endDate else { return [] }
+        return allStudyHistory().filter { startDate...endDate ~= $0.studiedAt }
+    }
+
+    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        var gregorianCalendar = Calendar(identifier: .gregorian)
+        gregorianCalendar.timeZone = calendar.timeZone
+        let components = gregorianCalendar.dateComponents([.year, .month, .day], from: date)
+        guard let year = components.year, let month = components.month, let day = components.day else { return "" }
+        return String(format: "%04d-%02d-%02d", locale: Locale(identifier: "en_US_POSIX"), year, month, day)
     }
 
     static func resetProgress(for topic: VocabularyTopic, at date: Date = .now) {

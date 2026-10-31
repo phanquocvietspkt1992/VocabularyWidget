@@ -2,11 +2,12 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-OUTPUT="${TMPDIR:-/tmp}/vocabulary-widget-progress-checks"
-MODULE_CACHE="${TMPDIR:-/tmp}/vocabulary-widget-swift-modules"
+OUTPUT_DIR="$ROOT/build/dev-study-history-progress-checks"
+OUTPUT="$OUTPUT_DIR/checks"
+MODULE_CACHE="$OUTPUT_DIR/modules"
 mkdir -p "$MODULE_CACHE"
 
-GROUP_ID="group.com.example.VocabularyWidget"
+GROUP_ID="group.com.phanquocviet.VocabularyWidget"
 grep -Fq "static let appGroupID = \"$GROUP_ID\"" "$ROOT/Shared/WidgetProgressStore.swift"
 grep -Fq "<string>$GROUP_ID</string>" "$ROOT/App/VocabularyWidget.entitlements"
 grep -Fq "<string>$GROUP_ID</string>" "$ROOT/Widget/VocabularyWidgetExtension.entitlements"

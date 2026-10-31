@@ -2,7 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-OUTPUT_DIR="$ROOT/build/next-word-intent-checks"
+OUTPUT_DIR="$ROOT/build/dev-study-history-next-word-intent-checks"
 mkdir -p "$OUTPUT_DIR/modules"
 
 # Compile the production intent verbatim, without the widget's separate @main.
@@ -11,7 +11,8 @@ import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_text()
-start = source.index("struct NextWordIntent: AppIntent")
+intent_starts = [source.index("struct NextWordIntent: AppIntent"), source.index("struct StudiedWordIntent: AppIntent")]
+start = min(intent_starts)
 if source[max(0, start - 8):start].endswith("private "):
     start -= len("private ")
 end = source.index("\n@main", start)

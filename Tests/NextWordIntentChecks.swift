@@ -21,6 +21,7 @@ struct NextWordIntentChecks {
         check(suite.integer(forKey: "progress.\(topic.id)") == 1, "first action saves word two")
         check(WidgetProgressStore.currentIndex(for: topic) == 1, "first action changes the current word")
         check(WidgetProgressStore.hasVisited(topic), "first action marks the topic visited")
+        check(WidgetProgressStore.allStudyHistory().isEmpty, "NextWordIntent must not record study history")
         checkTimer(suite, topic: topic, after: firstTap)
         check(VocabularyTimelineSchedule.make(for: topic, at: .now)[0].index == 1, "refreshed timeline starts with word two")
 
@@ -45,10 +46,26 @@ struct NextWordIntentChecks {
         check(suite.integer(forKey: "progress.\(otherTopic.id)") == otherProgress, "stale topic action preserves selected progress")
         check(suite.object(forKey: "anchor.\(otherTopic.id)") as? Date == otherAnchor, "stale topic action does not restart selected timer")
 
+        check(WidgetProgressStore.allStudyHistory().isEmpty, "all ordinary next actions must leave study history empty")
+
+        let studyTap = Date.now
+        WidgetProgressStore.resetProgress(for: otherTopic, at: studyTap)
+        _ = try await StudiedWordIntent(topicID: otherTopic.id, displayedIndex: 0).perform()
+        let studyRecords = WidgetProgressStore.allStudyHistory()
+        check(studyRecords.count == 1, "StudiedWordIntent.perform() records the word")
+        check(studyRecords[0].topicID == otherTopic.id && studyRecords[0].wordID == otherTopic.words[0].text, "StudiedWordIntent records the supplied topic and displayed word")
+        check(studyRecords[0].day == WidgetProgressStore.dayKey(for: studyRecords[0].studiedAt), "StudiedWordIntent stores the local day key")
+        check(suite.integer(forKey: "progress.\(otherTopic.id)") == 1, "StudiedWordIntent advances to the following word")
+        checkTimer(suite, topic: otherTopic, after: studyTap)
+        _ = try await StudiedWordIntent(topicID: otherTopic.id, displayedIndex: 0).perform()
+        check(WidgetProgressStore.allStudyHistory().count == 1, "StudiedWordIntent deduplicates repeat taps on the same word and day")
+
         print("NextWordIntent perform checks passed (\(checksPassed) checks).")
         let dispatchType = _typeByName("25VocabularyWidgetExtension14NextWordIntentV")
         check(dispatchType == NextWordIntent.self, "intent resolves by its non-private mangled dispatch identity")
-        print("NextWordIntent checks passed (\(checksPassed) checks; actual perform(), not system widget dispatch).")
+        let studiedDispatchType = _typeByName("25VocabularyWidgetExtension17StudiedWordIntentV")
+        check(studiedDispatchType == StudiedWordIntent.self, "studied intent resolves by its non-private mangled dispatch identity")
+        print("NextWordIntent and StudiedWordIntent checks passed (\(checksPassed) checks; actual perform(), not system widget dispatch).")
     }
 
     private static var checksPassed = 0

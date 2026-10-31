@@ -6,7 +6,7 @@ struct ProgressStoreChecks {
 
     static func main() {
         let testSuiteID = "VocabularyWidget.ProgressStoreChecks.\(UUID().uuidString)"
-        let suite = UserDefaults(suiteName: testSuiteID)!
+        let suite = HistoryTrackingDefaults(suiteName: testSuiteID)!
         let realAppGroupDefaults = UserDefaults(suiteName: WidgetProgressStore.appGroupID)!
         let protectedKey = "VocabularyWidget.ProgressStoreChecks.protected.\(UUID().uuidString)"
         realAppGroupDefaults.set("keep", forKey: protectedKey)
@@ -225,6 +225,121 @@ struct ProgressStoreChecks {
         check(WidgetProgressStore.currentIndex(for: travel, at: resetAt.addingTimeInterval(299)) == 0, "a reset should restart the five-minute dwell")
         check(WidgetProgressStore.currentIndex(for: travel, at: resetAt.addingTimeInterval(300)) == 1, "a reset topic should resume the normal cadence")
 
+        suite.removePersistentDomain(forName: testSuiteID)
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let historyStart = ISO8601DateFormatter().date(from: "2024-01-01T01:30:00Z")!
+        WidgetProgressStore.selectTopic(travel, at: historyStart)
+        WidgetProgressStore.resetProgress(for: travel, at: historyStart)
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 0, at: historyStart, calendar: utcCalendar), "mark studied should accept the selected nonempty topic")
+        check(WidgetProgressStore.allStudyHistory().count == 1, "a normal studied tap should create exactly one record")
+        let firstHistoryRecord = WidgetProgressStore.allStudyHistory().first
+        check(firstHistoryRecord?.topicID == travel.id && firstHistoryRecord?.wordID == travel.words[0].text, "study history should store the selected topic and displayed word text")
+        check(firstHistoryRecord?.day == "2024-01-01" && firstHistoryRecord?.studiedAt == historyStart, "study history should store the injected local day key and tap date")
+        check(WidgetProgressStore.currentIndex(for: travel, at: historyStart) == 1, "mark studied should advance from the displayed word")
+        check(suite.object(forKey: "anchor.\(travel.id)") as? Date == historyStart, "mark studied should restart the five-minute timer at the tap")
+        check(WidgetProgressStore.currentIndex(for: travel, at: historyStart.addingTimeInterval(299)) == 1, "marked word should remain for 299 seconds")
+        check(WidgetProgressStore.currentIndex(for: travel, at: historyStart.addingTimeInterval(300)) == 2, "marked word should continue the 300-second cadence")
+        check(WidgetProgressStore.dayKey(for: historyStart, calendar: utcCalendar) == "2024-01-01", "day keys should use fixed numeric formatting")
+        var newYorkCalendar = utcCalendar
+        newYorkCalendar.timeZone = TimeZone(identifier: "America/New_York")!
+        check(WidgetProgressStore.dayKey(for: historyStart, calendar: newYorkCalendar) == "2023-12-31", "day keys should use the injected local time zone")
+
+        for identifier in [Calendar.Identifier.buddhist, .japanese] {
+            var nonGregorianCalendar = Calendar(identifier: identifier)
+            nonGregorianCalendar.timeZone = newYorkCalendar.timeZone
+            check(WidgetProgressStore.dayKey(for: historyStart, calendar: nonGregorianCalendar) == "2023-12-31", "non-Gregorian calendars should still produce the Gregorian local day")
+            check(WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 2, at: historyStart, calendar: nonGregorianCalendar), "studied taps should accept an injected non-Gregorian calendar")
+            check(WidgetProgressStore.studyHistory(forDay: "2023-12-31").count == 1, "stored Gregorian local days should deduplicate across calendar identifiers")
+        }
+        // Keep the later history checks focused on the original UTC record.
+        suite.set(try! JSONEncoder().encode([firstHistoryRecord!]), forKey: "studyHistory.v1")
+        let beforeNext = WidgetProgressStore.allStudyHistory().count
+        suite.historyReads = 0
+        suite.historyWrites = 0
+        check(WidgetProgressStore.advanceDisplayedWord(topicID: travel.id, displayedIndex: 1, at: historyStart.addingTimeInterval(1)), "the ordinary next action should still advance")
+        check(suite.historyReads == 0 && suite.historyWrites == 0, "ordinary next must not read or write history")
+        check(WidgetProgressStore.allStudyHistory().count == beforeNext, "ordinary next must not record study history")
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 0, at: historyStart.addingTimeInterval(60), calendar: utcCalendar), "repeat marking should remain an accepted action")
+        check(WidgetProgressStore.allStudyHistory().count == 1, "the same word should be deduplicated within a local day")
+        check(WidgetProgressStore.currentIndex(for: travel, at: historyStart.addingTimeInterval(60)) == 1, "same-day deduplication should still advance from the displayed word")
+        check(suite.object(forKey: "anchor.travel") as? Date == historyStart.addingTimeInterval(60), "same-day deduplication should restart the anchor at tap time")
+        let nextDay = historyStart.addingTimeInterval(86_400)
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 0, at: nextDay, calendar: utcCalendar), "the same word should be markable on another day")
+        check(WidgetProgressStore.allStudyHistory().count == 2, "a new local day should create a separate record")
+        check(WidgetProgressStore.studiedWordIDs(for: travel.id) == [travel.words[0].text] && WidgetProgressStore.studiedWordCount(for: travel.id) == 1, "distinct topic counts should not count duplicate days")
+        check(WidgetProgressStore.studyHistory(forDay: "2024-01-02").count == 1, "history should be queryable by local day key")
+        check(WidgetProgressStore.studyHistory(from: nextDay, through: nextDay).count == 1, "history should be queryable by an inclusive date range")
+
+        let historyBeforeReset = WidgetProgressStore.allStudyHistory()
+        WidgetProgressStore.resetProgress(for: travel, at: nextDay.addingTimeInterval(100))
+        check(WidgetProgressStore.allStudyHistory() == historyBeforeReset, "resetting progress must preserve study history")
+        let historyBeforeStale = WidgetProgressStore.allStudyHistory()
+        WidgetProgressStore.selectTopic(work, at: nextDay.addingTimeInterval(200))
+        let beforeStaleState = suite.dictionaryRepresentation() as NSDictionary
+        suite.historyWrites = 0
+        check(!WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 0, at: nextDay.addingTimeInterval(199), calendar: utcCalendar), "a stale topic mark should be rejected even before the active anchor")
+        check(suite.historyWrites == 0, "a stale topic must not write history")
+        check(suite.dictionaryRepresentation() as NSDictionary == beforeStaleState, "a stale studied tap must not change any persisted state")
+        check(WidgetProgressStore.allStudyHistory() == historyBeforeStale, "a stale topic must not add study history")
+
+        let customHistoryTopic = try! CustomTopicStore.create(name: "History Tests")
+        let customHistoryWord = try! CustomVocabularyStore.add(text: "retrospective", partOfSpeech: "(n)", meaning: "buổi nhìn lại", examples: Array(customExamples.prefix(5)), to: customHistoryTopic.id)
+        WidgetProgressStore.selectTopic(VocabularyCatalog.topic(for: customHistoryTopic.id), at: nextDay.addingTimeInterval(300))
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: customHistoryTopic.id, displayedIndex: 0, at: nextDay.addingTimeInterval(301), calendar: utcCalendar), "custom topics and words should support study history")
+        check(WidgetProgressStore.studiedWordIDs(for: customHistoryTopic.id) == [customHistoryWord.text], "custom vocabulary should be recorded by word text")
+
+        let emptyHistoryTopic = try! CustomTopicStore.create(name: "Empty History Tests")
+        WidgetProgressStore.selectTopic(VocabularyCatalog.topic(for: emptyHistoryTopic.id), at: nextDay.addingTimeInterval(400))
+        let beforeEmptyMark = WidgetProgressStore.allStudyHistory().count
+        check(!WidgetProgressStore.markStudiedAndAdvance(topicID: emptyHistoryTopic.id, displayedIndex: 0, at: nextDay.addingTimeInterval(401), calendar: utcCalendar), "an empty topic should reject the studied action")
+        check(WidgetProgressStore.allStudyHistory().count == beforeEmptyMark, "an empty topic must not add study history")
+
+        WidgetProgressStore.selectTopic(travel, at: nextDay.addingTimeInterval(500))
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: travel.words.count - 1, at: nextDay.addingTimeInterval(501), calendar: utcCalendar), "mark studied should accept the final displayed word")
+        check(WidgetProgressStore.currentIndex(for: travel, at: nextDay.addingTimeInterval(501)) == 0, "mark studied should wrap after the final word")
+
+        check(suite.object(forKey: "anchor.travel") as? Date == nextDay.addingTimeInterval(501), "a wrapping studied tap should restart the anchor at tap time")
+
+        for invalidIndex in [-1, travel.words.count, Int.min, Int.max] {
+            let beforeInvalidIndex = suite.dictionaryRepresentation() as NSDictionary
+            suite.historyWrites = 0
+            check(!WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: invalidIndex, at: nextDay, calendar: utcCalendar), "studied taps should reject out-of-range displayed indexes")
+            check(suite.historyWrites == 0 && suite.dictionaryRepresentation() as NSDictionary == beforeInvalidIndex, "an invalid displayed index must not write history or progress")
+        }
+
+        for corruptHistory in [Data("not JSON".utf8), Data("{}".utf8), Data("[{\"topicID\":\"travel\"}]".utf8)] {
+            suite.set(corruptHistory, forKey: "studyHistory.v1")
+            suite.set(7, forKey: "progress.travel")
+            suite.set(nextDay.addingTimeInterval(600), forKey: "anchor.travel")
+            suite.set(false, forKey: "visited.travel")
+            let beforeCorruptMark = suite.dictionaryRepresentation() as NSDictionary
+            suite.historyWrites = 0
+            check(!WidgetProgressStore.markStudiedAndAdvance(topicID: travel.id, displayedIndex: 7, at: nextDay, calendar: utcCalendar), "malformed history should reject studied taps")
+            check(suite.historyWrites == 0, "malformed history must not be overwritten")
+            check(suite.data(forKey: "studyHistory.v1") == corruptHistory, "malformed history bytes must be preserved byte-for-byte")
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeCorruptMark, "rejected malformed history must preserve index, future anchor, visited and selected state")
+            check(WidgetProgressStore.allStudyHistory().isEmpty, "read-only queries may return empty history for malformed data")
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeCorruptMark, "read-only history queries must preserve malformed bytes and progress")
+        }
+
+        let corruptHistoryBeforeNext = suite.data(forKey: "studyHistory.v1")
+        suite.historyReads = 0
+        suite.historyWrites = 0
+        let nextWrapAt = nextDay.addingTimeInterval(700)
+        check(WidgetProgressStore.advanceDisplayedWord(topicID: travel.id, displayedIndex: travel.words.count - 1, at: nextWrapAt), "Next should still accept and wrap with corrupt history")
+        check(suite.historyReads == 0 && suite.historyWrites == 0, "Next wrapping must not read or write malformed history")
+        check(suite.integer(forKey: "progress.travel") == 0 && suite.object(forKey: "anchor.travel") as? Date == nextWrapAt, "Next wrap should preserve its progress and tap-time anchor behavior")
+        check(suite.data(forKey: "studyHistory.v1") == corruptHistoryBeforeNext, "Next must preserve malformed history bytes")
+        let beforeStaleNext = suite.dictionaryRepresentation() as NSDictionary
+        suite.historyReads = 0
+        suite.historyWrites = 0
+        check(!WidgetProgressStore.advanceDisplayedWord(topicID: work.id, displayedIndex: 0, at: nextWrapAt.addingTimeInterval(1)), "Next should still reject stale topics with corrupt history")
+        check(suite.historyReads == 0 && suite.historyWrites == 0, "stale Next must not read or write history")
+        check(suite.dictionaryRepresentation() as NSDictionary == beforeStaleNext, "stale Next should preserve initialized progress")
+        check(WidgetProgressStore.advanceDisplayedWord(topicID: travel.id, displayedIndex: -1, at: nextWrapAt), "Next should retain displayed-index normalization")
+        check(suite.integer(forKey: "progress.travel") == 0, "Next should normalize minus one to the final word and wrap")
+
         print("Progress checks passed (\(checksPassed) checks).")
     }
 
@@ -234,5 +349,25 @@ struct ProgressStoreChecks {
             fputs("FAIL: \(message)\n", stderr)
             exit(1)
         }
+    }
+}
+
+private final class HistoryTrackingDefaults: UserDefaults {
+    var historyReads = 0
+    var historyWrites = 0
+
+    override func object(forKey defaultName: String) -> Any? {
+        if defaultName == "studyHistory.v1" { historyReads += 1 }
+        return super.object(forKey: defaultName)
+    }
+
+    override func data(forKey defaultName: String) -> Data? {
+        if defaultName == "studyHistory.v1" { historyReads += 1 }
+        return super.data(forKey: defaultName)
+    }
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        if defaultName == "studyHistory.v1" { historyWrites += 1 }
+        super.set(value, forKey: defaultName)
     }
 }
