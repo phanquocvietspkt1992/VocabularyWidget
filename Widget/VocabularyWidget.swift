@@ -112,7 +112,7 @@ private struct VocabularyWidgetView: View {
     }
 }
 
-private struct NextWordIntent: AppIntent {
+struct NextWordIntent: AppIntent {
     static var title: LocalizedStringResource = "Từ tiếp theo"
     @Parameter(title: "Chủ đề") var topicID: String
     @Parameter(title: "Vị trí từ đang hiển thị") var displayedIndex: Int

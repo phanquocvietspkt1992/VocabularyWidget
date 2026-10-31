@@ -19,3 +19,7 @@ The timeline schedules words five minutes apart in advance. WidgetKit controls a
 ## Local progress checks
 
 Run `sh Tests/run_progress_checks.sh` to check the catalog entries, five-minute index changes, and per-topic save/resume behavior on macOS.
+
+Run `sh Tests/run_next_word_intent_checks.sh` to exercise the production `NextWordIntent.perform()` on macOS with isolated defaults: first tap, a refreshed tap, five-minute timer restart, wrapping, and stale-topic protection. This is not a Home Screen interaction test.
+
+After an iOS build, run `python3 Tests/check_next_word_intent_metadata.py /path/to/VocabularyWidgetExtension.appex /path/to/VocabularyWidget.swiftconstvalues` using the extension bundle in `Build/Products` and the constants file in its `Build/Intermediates.noindex` objects directory. Keep the intent module-visible (not `private`) to avoid a file-private dispatch identity. This checks extracted action discovery and its required topic/index payload; metadata presence alone does not verify system dispatch. Verify the first visible word change separately on both widget sizes.
