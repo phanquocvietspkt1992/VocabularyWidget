@@ -23,6 +23,9 @@ PY
 swiftc \
   -module-name VocabularyWidgetExtension \
   -module-cache-path "$OUTPUT_DIR/modules" \
+  "$ROOT/Shared/VocabularyExtraExamples.swift" \
+  "$ROOT/Shared/VocabularySchedule.swift" \
+  "$ROOT/Shared/VocabularyNotifications.swift" \
   "$ROOT/Shared/VocabularyData.swift" \
   "$ROOT/Shared/WidgetProgressStore.swift" \
   "$OUTPUT_DIR/NextWordIntent.swift" \

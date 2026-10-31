@@ -450,7 +450,10 @@ enum VocabularyCatalog {
     static var topics: [VocabularyTopic] {
         let builtIn = baseTopics.map { topic in
             let custom = CustomVocabularyStore.words(for: topic.id)
-            return VocabularyTopic(id: topic.id, name: topic.name, words: topic.words + custom)
+            return VocabularyTopic(id: topic.id, name: topic.name, words: topic.words.map { word in
+                VocabularyWord(text: word.text, partOfSpeech: word.partOfSpeech, meaning: word.meaning,
+                               examples: [word.example] + (VocabularyExtraExamples.byTopic[topic.id]?[word.text] ?? []))
+            } + custom)
         }
         return builtIn + CustomTopicStore.topics.map { topic in
             VocabularyTopic(id: topic.id, name: topic.name, words: CustomVocabularyStore.words(for: topic.id))

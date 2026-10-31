@@ -27,7 +27,7 @@ private struct VocabularyTimelineProvider: TimelineProvider {
         WidgetProgressStore.ensureSelectedTopicInitialized()
         let topic = VocabularyCatalog.topic(for: WidgetProgressStore.selectedTopicID)
         let now = Date.now
-        // Pre-schedule the next 24 hours; iOS still decides when entries appear onscreen.
+        // Pre-schedule upcoming active-window ticks; iOS still decides when entries appear onscreen.
         let entries = VocabularyTimelineSchedule.make(for: topic, at: now).map {
             makeEntry(topic: topic, index: $0.index, date: $0.date)
         }
@@ -144,8 +144,9 @@ struct NextWordIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        WidgetProgressStore.advanceDisplayedWord(topicID: topicID, displayedIndex: displayedIndex)
+        let changed = WidgetProgressStore.advanceDisplayedWord(topicID: topicID, displayedIndex: displayedIndex)
         WidgetCenter.shared.reloadTimelines(ofKind: "VocabularyWidget")
+        if changed { await VocabularyNotifications.reschedule() }
         return .result()
     }
 }
@@ -163,8 +164,9 @@ struct StudiedWordIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        WidgetProgressStore.markStudiedAndAdvance(topicID: topicID, displayedIndex: displayedIndex)
+        let changed = WidgetProgressStore.markStudiedAndAdvance(topicID: topicID, displayedIndex: displayedIndex)
         WidgetCenter.shared.reloadTimelines(ofKind: "VocabularyWidget")
+        if changed { await VocabularyNotifications.reschedule() }
         return .result()
     }
 }

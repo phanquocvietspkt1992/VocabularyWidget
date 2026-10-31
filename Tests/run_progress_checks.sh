@@ -14,6 +14,9 @@ grep -Fq "<string>$GROUP_ID</string>" "$ROOT/Widget/VocabularyWidgetExtension.en
 
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Shared/VocabularyExtraExamples.swift" \
+  "$ROOT/Shared/VocabularySchedule.swift" \
+  "$ROOT/Shared/VocabularyNotifications.swift" \
   "$ROOT/Shared/VocabularyData.swift" \
   "$ROOT/Shared/WidgetProgressStore.swift" \
   "$ROOT/Tests/ProgressStoreChecks.swift" \

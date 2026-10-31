@@ -29,12 +29,18 @@ enum PronunciationAudioSessionPolicy {
     static let activationRetryDelayNanoseconds: UInt64 = 150_000_000
     static let debounceNanoseconds: UInt64 = 300_000_000
     static let cannotStartPlayingCode = 561_015_905
+    static let ioStartDeniedCode = 2_003_329_396
     static let category = Category.playback
     static let mode = Mode.spokenAudio
     static let options: Set<Option> = [.mixWithOthers]
 
     static func shouldRetryActivation(errorCode: Int, attempt: Int) -> Bool {
         errorCode == cannotStartPlayingCode && attempt == 0
+    }
+
+    // A suspended app process woken in background cannot regain audio IO; only an intent cold launch can.
+    static func shouldRecycleProcess(errorCode: Int, isBackground: Bool) -> Bool {
+        isBackground && (errorCode == ioStartDeniedCode || errorCode == cannotStartPlayingCode)
     }
 
     static func shouldDebounce(existingWord: String, incomingWord: String, elapsedNanoseconds: UInt64) -> Bool {
@@ -70,7 +76,7 @@ import os
 import UIKit
 #endif
 
-private func pronunciationLog(_ message: String, error: Error? = nil) {
+func pronunciationLog(_ message: String, error: Error? = nil) {
     var details = message
     if let error {
         let value = error as NSError
@@ -131,6 +137,12 @@ private extension PronunciationAudioSessionPolicy {
         options.reduce(into: AVAudioSession.CategoryOptions()) { result, option in
             switch option { case .mixWithOthers: result.insert(.mixWithOthers) }
         }
+    }
+}
+
+enum PronunciationAudioWarmup {
+    @MainActor static func prepareInForeground() {
+        WordPronunciationPlayer.shared.prepareForegroundSession()
     }
 }
 
@@ -272,6 +284,39 @@ private final class WordPronunciationPlayer: NSObject {
         }
     }
 
+    func prepareForegroundSession() {
+        guard playback == nil else { return }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(PronunciationAudioSessionPolicy.audioCategory,
+                                    mode: PronunciationAudioSessionPolicy.audioMode,
+                                    options: PronunciationAudioSessionPolicy.audioOptions)
+            try session.setActive(true)
+            audioOwnership.begin()
+            pronunciationLog("foreground session prepared appState=\(applicationStateDescription())")
+        } catch {
+            pronunciationLog("foreground session prepare failure appState=\(applicationStateDescription())", error: error)
+        }
+    }
+
+    private func recycleProcessIfAudioDenied(_ error: Error, requestID: UUID) {
+        #if APP_PROCESS_DIAGNOSTICS
+        let code = (error as NSError).code
+        guard PronunciationAudioSessionPolicy.shouldRecycleProcess(errorCode: code,
+                                                                   isBackground: applicationStateDescription() == "background") else { return }
+        pronunciationLog("process recycle scheduled request=\(requestID.uuidString) delayMs=500", error: error)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard UIApplication.shared.applicationState == .background, self?.playback == nil else {
+                pronunciationLog("process recycle skipped appState=\(self?.applicationStateDescription() ?? "unknown")")
+                return
+            }
+            pronunciationLog("process recycle exit")
+            exit(0)
+        }
+        #endif
+    }
+
     private func applicationStateDescription() -> String {
         #if APP_PROCESS_DIAGNOSTICS
         guard Bundle.main.bundleURL.pathExtension != "appex",
@@ -337,6 +382,7 @@ private final class WordPronunciationPlayer: NSObject {
                 } catch {
                     logActivationFailure(error, requestID: id, attempt: 2)
                     complete(id: id, reason: .startFailure, error: error, stop: false)
+                    recycleProcessIfAudioDenied(error, requestID: id)
                     return
                 }
             }
@@ -426,6 +472,7 @@ private final class WordPronunciationPlayer: NSObject {
             try connectAndStartEngine(format: format, requestID: id)
         } catch {
             complete(id: id, reason: .startFailure, error: error, stop: true)
+            recycleProcessIfAudioDenied(error, requestID: id)
             return
         }
         for index in start..<end {
@@ -471,14 +518,33 @@ private final class WordPronunciationPlayer: NSObject {
             connectedFormat = format
         }
         engine.prepare()
-        if !engine.isRunning {
-            do {
-                try engine.start()
-                pronunciationLog("engine started request=\(requestID.uuidString)")
-            } catch {
-                pronunciationLog("engine start failure request=\(requestID.uuidString)", error: error)
-                throw error
-            }
+        guard !engine.isRunning else { return }
+        do {
+            try engine.start()
+            pronunciationLog("engine started request=\(requestID.uuidString)")
+            return
+        } catch {
+            let session = AVAudioSession.sharedInstance()
+            let outputs = session.currentRoute.outputs.map { "\($0.portType.rawValue)/\($0.portName)" }.joined(separator: ",")
+            pronunciationLog("engine start failure request=\(requestID.uuidString) otherAudioPlaying=\(session.isOtherAudioPlaying) sessionSampleRate=\(session.sampleRate) outputs=[\(outputs)] appState=\(applicationStateDescription())", error: error)
+        }
+        // A stale output unit (e.g. after a route or hardware change) can refuse to start; rebuild it once.
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            pronunciationLog("engine recovery setActive(true) success request=\(requestID.uuidString)")
+        } catch {
+            pronunciationLog("engine recovery setActive(true) failure request=\(requestID.uuidString)", error: error)
+        }
+        recreateEngine()
+        engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        connectedFormat = format
+        engine.prepare()
+        do {
+            try engine.start()
+            pronunciationLog("engine started after recovery request=\(requestID.uuidString)")
+        } catch {
+            pronunciationLog("engine start failure after recovery request=\(requestID.uuidString)", error: error)
+            throw error
         }
     }
 
@@ -537,9 +603,9 @@ private final class WordPronunciationPlayer: NSObject {
         if type == AVAudioSession.InterruptionType.began.rawValue, let current = playback {
             complete(id: current.id, reason: .cancel, error: CancellationError(), stop: true)
         }
-        // The system deactivates the session on interruption, and `.ended` is not guaranteed.
+        guard type == AVAudioSession.InterruptionType.ended.rawValue else { return }
         audioOwnership.reset()
-        pronunciationLog("audio session active flag reset after interruption type=\(type)")
+        pronunciationLog("audio session active flag reset after interruption ended")
     }
 
     private func observeApplicationLifecycle() {

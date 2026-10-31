@@ -18,6 +18,16 @@ struct ProgressStoreChecks {
             realAppGroupDefaults.removeObject(forKey: protectedKey)
         }
 
+        let builtInTopics = VocabularyCatalog.topics.prefix(8)
+        check(builtInTopics.reduce(0) { $0 + $1.words.count } == 400, "built-in catalog should keep 400 words")
+        for topic in builtInTopics {
+            for word in topic.words {
+                let cleaned = word.examples.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                check(cleaned.count == 5 && !cleaned.contains("") && Set(cleaned).count == 5,
+                      "built-in word \(topic.id)/\(word.text) should have five unique examples")
+            }
+        }
+
         check(VocabularyCatalog.topics.count == 8, "topic catalog should contain five IT topics and three existing topics")
         let expectedPartsOfSpeech: Set<String> = ["(n)", "(v)", "(adj)", "(adv)"]
         for topic in VocabularyCatalog.topics {
@@ -31,7 +41,7 @@ struct ProgressStoreChecks {
         let travel = VocabularyCatalog.topic(for: "travel")
         let work = VocabularyCatalog.topic(for: "work")
         let workCommunication = VocabularyCatalog.topic(for: "work_communication")
-        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let start = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date(timeIntervalSince1970: 1_800_000_000))!
 
         WidgetProgressStore.ensureSelectedTopicInitialized(at: start)
         check(WidgetProgressStore.selectedTopicID == workCommunication.id, "a new install should default to the first IT topic")
@@ -125,9 +135,9 @@ struct ProgressStoreChecks {
         check(WidgetProgressStore.currentIndex(for: travel, at: start) == 0, "a new topic should start at its first word")
         check(WidgetProgressStore.currentIndex(for: travel, at: start.addingTimeInterval(299)) == 0, "word should remain for five minutes")
         check(WidgetProgressStore.currentIndex(for: travel, at: start.addingTimeInterval(300)) == 1, "word should advance at five minutes")
-        let firstSelection = start.addingTimeInterval(900)
+        let firstSelection = start
         WidgetProgressStore.selectTopic(travel, at: firstSelection)
-        check(WidgetProgressStore.currentIndex(for: travel, at: firstSelection) == 0, "first explicit selection should start at word one")
+        check(WidgetProgressStore.currentIndex(for: travel, at: firstSelection) == 0, "reselecting the default topic at its anchor should preserve word one")
         check(WidgetProgressStore.currentIndex(for: travel, at: firstSelection.addingTimeInterval(299)) == 0, "first selected word should remain for five minutes")
         check(WidgetProgressStore.currentIndex(for: travel, at: firstSelection.addingTimeInterval(300)) == 1, "the first selected word should advance after five minutes")
         check(WidgetProgressStore.secondsUntilNextChange(for: travel, at: firstSelection.addingTimeInterval(299)) == 1, "the app countdown should show one second at the interval boundary")
@@ -135,12 +145,12 @@ struct ProgressStoreChecks {
         WidgetProgressStore.selectTopic(travel, at: firstSelection.addingTimeInterval(100))
         check(WidgetProgressStore.nextChange(after: firstSelection.addingTimeInterval(100), for: travel) == firstSelection.addingTimeInterval(300), "reselecting an active topic should not reset its timer")
         let nearBoundary = firstSelection.addingTimeInterval(299)
-        check(WidgetProgressStore.nextChange(after: nearBoundary, for: travel).timeIntervalSince(WidgetProgressStore.currentEntryDate(for: travel, at: nearBoundary)) == WidgetProgressStore.interval, "timeline entries should stay at least five minutes apart near a boundary")
+        check(WidgetProgressStore.nextChange(after: nearBoundary, for: travel).timeIntervalSince(WidgetProgressStore.currentEntryDate(for: travel, at: nearBoundary)) == 1, "the current snapshot should lead to the next tick in one second")
         let schedule = VocabularyTimelineSchedule.make(for: travel, at: nearBoundary)
         check(schedule.count == VocabularyTimelineSchedule.futureEntryCount + 1, "the timeline should contain the current word and a day of future entries")
         check(schedule[0].index == 0 && schedule[1].index == 1, "the schedule should begin with the current word then advance")
         for pair in zip(schedule, schedule.dropFirst()) {
-            check(pair.1.date.timeIntervalSince(pair.0.date) == WidgetProgressStore.interval, "scheduled entries should be exactly five minutes apart")
+            check(pair.1.date == WidgetProgressStore.nextChange(after: pair.0.date, for: travel), "scheduled entries should follow the active-window tick function")
         }
 
         let switchedAt = firstSelection.addingTimeInterval(600)

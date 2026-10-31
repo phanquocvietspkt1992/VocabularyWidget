@@ -2,6 +2,7 @@ import SwiftUI
 import WidgetKit
 
 private final class TopicSelectionModel: ObservableObject {
+    @Published var showingSchedule = false
     @Published var selectedID = WidgetProgressStore.selectedTopicID
     @Published var now = Date.now
     @Published var showingResetConfirmation = false
@@ -25,10 +26,12 @@ struct TopicPickerView: View {
         NavigationStack {
             List(VocabularyCatalog.topics) { topic in
                 Button {
+                    guard WidgetProgressStore.selectedTopicID != topic.id else { return }
                     WidgetProgressStore.selectTopic(topic)
                     model.selectedID = topic.id
                     model.now = .now
                     WidgetCenter.shared.reloadAllTimelines()
+                    Task { await VocabularyNotifications.reschedule() }
                 } label: {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 5) {
@@ -58,7 +61,13 @@ struct TopicPickerView: View {
                 }
             }
             .navigationTitle("Chọn chủ đề")
+            .sheet(isPresented: $model.showingSchedule, onDismiss: { model.refreshID = UUID(); model.now = .now }) {
+                VocabularyScheduleSettingsView()
+            }
             .toolbar {
+                ToolbarItem(placement: .bottomBar) {
+                    Button { model.showingSchedule = true } label: { Label("Lịch học và thông báo", systemImage: "clock") }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { model.showingCreateTopic = true } label: { Label("Tạo chủ đề", systemImage: "plus") }
                 }
@@ -102,6 +111,7 @@ struct TopicPickerView: View {
                     WidgetProgressStore.resetProgress(for: VocabularyCatalog.topic(for: topicID))
                     model.now = .now
                     WidgetCenter.shared.reloadAllTimelines()
+                    Task { await VocabularyNotifications.reschedule() }
                     model.resetTopicID = nil
                 }
             } message: {
@@ -115,7 +125,7 @@ struct TopicPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                Text("Widget lần lượt đổi từ sau khoảng 5 phút. iOS có thể làm mới trễ hơn.")
+                Text("Widget lần lượt đổi từ sau khoảng \(WidgetProgressStore.schedule.intervalMinutes) phút trong giờ học. iOS có thể làm mới trễ hơn.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding()
                     .frame(maxWidth: .infinity)
@@ -128,7 +138,6 @@ struct TopicPickerView: View {
         let index = WidgetProgressStore.currentIndex(for: topic, at: model.now)
         guard !topic.words.isEmpty else { return model.selectedID == topic.id ? "Đang chọn · chưa có từ · dùng ‘Từ của tao’ để thêm" : "Chưa có từ · chọn chủ đề rồi thêm từ" }
         if model.selectedID == topic.id {
-            guard WidgetProgressStore.hasVisited(topic) else { return "Mặc định trên widget · chạm để bắt đầu" }
             let seconds = WidgetProgressStore.secondsUntilNextChange(for: topic, at: model.now)
             let minutes = max(1, Int(ceil(Double(seconds) / 60)))
             return "Đang chọn · từ \(index + 1)/\(topic.words.count) · \(topic.words[index].text) · đổi sau ~\(minutes) phút"
@@ -150,6 +159,7 @@ struct TopicPickerView: View {
             model.refreshID = UUID()
             model.showingCreateTopic = false
             WidgetCenter.shared.reloadAllTimelines()
+            Task { await VocabularyNotifications.reschedule() }
         } catch CustomTopicStore.CreateError.emptyName {
             model.topicCreationError = "Nhập tên chủ đề trước đã."
         } catch CustomTopicStore.CreateError.duplicateName {
@@ -192,7 +202,11 @@ private struct CustomVocabularyView: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Đóng") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Button { showingAdd = true } label: { Image(systemName: "plus") } }
             }
-            .sheet(isPresented: $showingAdd, onDismiss: { refreshID = UUID(); WidgetCenter.shared.reloadAllTimelines() }) {
+            .sheet(isPresented: $showingAdd, onDismiss: {
+                refreshID = UUID()
+                WidgetCenter.shared.reloadAllTimelines()
+                Task { await VocabularyNotifications.reschedule() }
+            }) {
                 AddCustomWordView(topicID: topicID)
             }
         }
@@ -260,6 +274,7 @@ private struct AddCustomWordView: View {
         do {
             try CustomVocabularyStore.add(text: text, partOfSpeech: partOfSpeech, meaning: meaning, examples: examples, to: topicID)
             WidgetCenter.shared.reloadAllTimelines()
+            Task { await VocabularyNotifications.reschedule() }
             dismiss()
         } catch CustomVocabularyStore.AddError.duplicate {
             errorMessage = "Từ này đã có trong chủ đề."
@@ -282,6 +297,7 @@ private struct AddCustomWordView: View {
                 return
             }
             WidgetCenter.shared.reloadAllTimelines()
+            Task { await VocabularyNotifications.reschedule() }
             var summary = "Đã thêm \(result.added.count) từ."
             if !result.issues.isEmpty {
                 summary += "\n" + result.issues.map { "Mục \($0.block): \($0.message)." }.joined(separator: "\n")

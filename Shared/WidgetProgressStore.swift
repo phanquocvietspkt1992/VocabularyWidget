@@ -9,7 +9,32 @@ struct StudyHistoryRecord: Codable, Equatable {
 
 enum WidgetProgressStore {
     static let appGroupID = "group.com.phanquocviet.VocabularyWidget"
-    static let interval: TimeInterval = 5 * 60
+    static var interval: TimeInterval { schedule.interval }
+    static var schedule: VocabularySchedule {
+        guard let data = defaults.data(forKey: "schedule.v1"),
+              let value = try? JSONDecoder().decode(VocabularySchedule.self, from: data), value.isValid else { return VocabularySchedule() }
+        return value
+    }
+
+    @discardableResult
+    static func updateSchedule(_ value: VocabularySchedule, at date: Date = .now) -> Bool {
+        guard value.isValid, let data = try? JSONEncoder().encode(value) else { return false }
+        let current = schedule
+        guard value != current else { return true }
+        var timingOnly = value
+        timingOnly.notificationsEnabled = current.notificationsEnabled
+        guard timingOnly != current else {
+            // Toggling notifications must not re-anchor the word cadence.
+            defaults.set(data, forKey: "schedule.v1")
+            return true
+        }
+        ensureSelectedTopicInitialized(at: date)
+        let topic = VocabularyCatalog.topic(for: selectedTopicID)
+        defaults.set(currentIndex(for: topic, at: date), forKey: indexKey(topic.id))
+        defaults.set(date, forKey: anchorKey(topic.id))
+        defaults.set(data, forKey: "schedule.v1")
+        return true
+    }
     private static let selectedKey = "selectedTopic"
     private static let studyHistoryKey = "studyHistory.v1"
     static var testDefaults: UserDefaults?
@@ -56,28 +81,15 @@ enum WidgetProgressStore {
         guard topic.id == selectedTopicID else {
             return savedIndex
         }
-        guard let anchor = defaults.object(forKey: anchorKey(topic.id)) as? Date else {
-            return min(savedIndex, topic.words.count - 1)
-        }
-        let elapsedIntervals = date.timeIntervalSince(anchor) / interval
-        guard elapsedIntervals.isFinite else { return savedIndex }
-        let elapsedSteps = elapsedIntervals > 0
-            ? Int(floor(elapsedIntervals.truncatingRemainder(dividingBy: Double(topic.words.count))))
-            : 0
+        let anchor = min(defaults.object(forKey: anchorKey(topic.id)) as? Date ?? date, date)
+        let elapsedSteps = schedule.eligibleTickCount(anchor: anchor, at: date) % topic.words.count
         return (savedIndex + elapsedSteps) % topic.words.count
     }
 
     static func selectTopic(_ topic: VocabularyTopic, at date: Date = .now) {
         ensureSelectedTopicInitialized(at: date)
         let previous = VocabularyCatalog.topic(for: selectedTopicID)
-        if previous.id == topic.id {
-            if !hasVisited(topic) {
-                defaults.set(0, forKey: indexKey(topic.id))
-                defaults.set(date, forKey: anchorKey(topic.id))
-            }
-            defaults.set(true, forKey: visitedKey(topic.id))
-            return
-        }
+        if previous.id == topic.id { return }
         if defaults.object(forKey: anchorKey(previous.id)) != nil {
             defaults.set(currentIndex(for: previous, at: date), forKey: indexKey(previous.id))
             defaults.set(date, forKey: anchorKey(previous.id))
@@ -181,20 +193,12 @@ enum WidgetProgressStore {
     }
 
     static func nextChange(after date: Date = .now, for topic: VocabularyTopic) -> Date {
-        ensureAnchor(for: topic, at: date)
-        guard let anchor = defaults.object(forKey: anchorKey(topic.id)) as? Date else { return date.addingTimeInterval(interval) }
-        let elapsedSeconds = max(0, date.timeIntervalSince(anchor))
-        guard elapsedSeconds.isFinite else {
-            defaults.set(date, forKey: anchorKey(topic.id))
-            return date.addingTimeInterval(interval)
-        }
-        let remainder = elapsedSeconds.truncatingRemainder(dividingBy: interval)
-        let delay = remainder == 0 ? interval : interval - remainder
-        return date.addingTimeInterval(delay)
+        let anchor = min(defaults.object(forKey: anchorKey(topic.id)) as? Date ?? date, date)
+        return schedule.nextChange(anchor: anchor, after: date)
     }
 
     static func currentEntryDate(for topic: VocabularyTopic, at date: Date = .now) -> Date {
-        nextChange(after: date, for: topic).addingTimeInterval(-interval)
+        date
     }
 
     static func secondsUntilNextChange(for topic: VocabularyTopic, at date: Date = .now) -> Int {
@@ -377,15 +381,11 @@ enum VocabularyTimelineSchedule {
     static func make(for topic: VocabularyTopic, at now: Date) -> [VocabularyTimelinePoint] {
         let currentIndex = WidgetProgressStore.currentIndex(for: topic, at: now)
         let currentEntryDate = WidgetProgressStore.currentEntryDate(for: topic, at: now)
-        let nextChange = WidgetProgressStore.nextChange(after: now, for: topic)
-        let wordCount = max(1, topic.words.count)
+        var nextChange = now
         var points = [VocabularyTimelinePoint(date: currentEntryDate, index: currentIndex)]
-
-        for step in 0..<futureEntryCount {
-            points.append(VocabularyTimelinePoint(
-                date: nextChange.addingTimeInterval(Double(step) * WidgetProgressStore.interval),
-                index: (currentIndex + step + 1) % wordCount
-            ))
+        for _ in 0..<futureEntryCount {
+            nextChange = WidgetProgressStore.nextChange(after: nextChange, for: topic)
+            points.append(VocabularyTimelinePoint(date: nextChange, index: WidgetProgressStore.currentIndex(for: topic, at: nextChange)))
         }
         return points
     }

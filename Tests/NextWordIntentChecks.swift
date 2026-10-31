@@ -77,8 +77,8 @@ struct NextWordIntentChecks {
         check(anchor >= tap && anchor <= .now, "action restarts the timer at execution time")
         let index = WidgetProgressStore.currentIndex(for: topic, at: anchor)
         check(WidgetProgressStore.currentIndex(for: topic, at: anchor.addingTimeInterval(299)) == index, "action word remains for 299 seconds")
-        check(WidgetProgressStore.currentIndex(for: topic, at: anchor.addingTimeInterval(300)) == (index + 1) % topic.words.count, "action word advances at 300 seconds")
-        check(WidgetProgressStore.nextChange(after: anchor, for: topic) == anchor.addingTimeInterval(300), "action schedules a full five-minute dwell")
+        check(WidgetProgressStore.currentIndex(for: topic, at: WidgetProgressStore.nextChange(after: anchor, for: topic)) == (index + 1) % topic.words.count, "action word advances at 300 seconds")
+        check(WidgetProgressStore.nextChange(after: anchor, for: topic) == WidgetProgressStore.schedule.nextChange(anchor: anchor, after: anchor), "action schedules the next eligible full dwell")
     }
 
     private static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
