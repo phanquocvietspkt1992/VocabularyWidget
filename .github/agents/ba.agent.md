@@ -15,14 +15,18 @@ Inspect only the nearest owning abstraction, one relevant caller, and its existi
 
 When a feature changes a topic-scoped counter or count, require a mixed-topic fixture that proves activity in one topic does not change another topic's count. State the expected invariant explicitly; do not treat a same-topic-only fixture as sufficient.
 
+Refine effort and risk estimates separately. Map acceptance criteria only to likely owning behavior, callers, persisted state, targets, and relevant tests; label this impact map as suspected until Dev or a check confirms it. Do not build a complete repository map.
+
 Do not repeat the PM summary, survey adjacent modules, invent requirements, or edit files. Ask no questions when the desired behavior is explicit.
 
 Return:
 
 ```text
 Input received from PM:
+Effort / risk refinement:
 Owning path:
 Acceptance criteria:
+Impact map (suspected surfaces and evidence):
 Cheapest disconfirming check:
 Runtime-only checks:
 Open risks:

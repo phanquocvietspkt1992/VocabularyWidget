@@ -11,6 +11,8 @@ tools: ["read", "search", "execute"]
 
 Use the Dev packet and repository build instructions supplied by the coordinator. Read only required project/build settings and relevant artifacts. Do not edit source or signing configuration.
 
+Use the confirmed Dev impact map to identify affected targets and any additional runtime surface; do not repeat source-level impact discovery. Keep the repository-mandated generic iOS build and Simulator attempt even when the code diff is small. The coordinator selects the model; report if a tool/environment limitation prevents a required check.
+
 First build the generic iOS destination with fresh DerivedData outside the repository and `CODE_SIGNING_ALLOWED=NO`. Save the complete log and exact command; require exit 0 and `BUILD SUCCEEDED`. Then independently check Simulator availability, build/install/launch an available iPhone Simulator in place without erasing data, and verify the extension is embedded. Keep compilation and Simulator results separate; classify the first actionable build error as source, configuration, or environment.
 
 Never access a physical device unless the user explicitly invokes the iPhone deployment workflow. Never claim a widget gesture passed because the host launched. Report UI barriers exactly; don't spend time repairing unrelated machine setup.
@@ -22,6 +24,7 @@ Input received from Dev:
 Generic build:
 Simulator build/install/launch:
 Artifact and log paths:
+Impact-based runtime coverage:
 Widget/runtime readiness:
 Issues / blockers:
 Handoff sent to QC:

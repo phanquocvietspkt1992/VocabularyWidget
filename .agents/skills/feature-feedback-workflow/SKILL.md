@@ -17,6 +17,14 @@ Coordinate the role agents in [`.github/agents/`](../../../.github/agents/). The
 - **DevOps:** for iOS changes, build generic iOS first, then prepare Simulator. If user acceptance includes physical installation, use the separate `iphone-device-build` skill only when requested.
 - **QC:** independently challenge each criterion using focused checks and the actual user path. Mark inaccessible UI/device criteria `BLOCKED` or `UNVERIFIED`; never infer them from compilation or app launch.
 
+## Complexity, impact, and model routing
+
+- The coordinator records **effort** and **risk/impact** separately. Use `small / medium / large / unknown` for estimated effort and `low / medium / high / unknown` for risk; a small edit can still be high-risk when it affects persistence, shared app/extension state, concurrency, audio/App Intents, or irreversible user-visible behavior.
+- Build an evidence-backed impact map incrementally: relevant paths/symbols, callers, stored state, app/extension targets, and user paths. Label entries `suspected`, `confirmed`, or `ruled out`; include evidence and confidence. Keep the map narrow and expand only when a nearby check or dependency requires it.
+- Role ownership: PM describes user impact and criticality, not code impact; BA maps acceptance criteria to likely behaviors and technical surfaces; Dev confirms actual code/caller/data/target impact; DevOps selects required build and runtime surfaces from that map; QC independently challenges the map and checks direct behavior plus material adjacent regressions.
+- The coordinator chooses the model/capability **before** invoking each role, using models actually available in the host. Prefer an efficient model for clear low-risk framing and routine work, a balanced model for multi-path changes, and the strongest available reasoning/coding model for high-risk implementation and QC. For high-impact work, use an independent QC model when available and worth the extra cost. Keep PM/BA on efficient models unless product ambiguity demands more reasoning.
+- Do not hard-code model names in role instructions or imply a model switch occurred when the host does not expose that control. If selection is unavailable, state the limitation and use the active model. Save tokens with narrow context, concise handoffs, and risk-based focused checks; never skip required build/deployment gates or acceptance criteria to save tokens.
+
 ## Autonomy and learning
 
 - When the user explicitly requests implementation or approves a defined outcome, the coordinator owns the sequential workflow through QC. Proceed with routine, scoped edits and focused checks without asking for repeated permission; ask only when a material product decision is unresolved or a required acceptance check is blocked.
@@ -33,10 +41,13 @@ For every run, preserve each role's concise audit record: input/handoff received
 
 ```text
 User outcome / non-goals:
+Effort / risk (separate estimates):
 Acceptance criteria:
+Impact map (suspected / confirmed / ruled out, with evidence):
 Relevant paths and verified facts:
 Existing changes or constraints:
 Cheapest focused check:
+Model capability selected / availability:
 Unresolved risks:
 ```
 

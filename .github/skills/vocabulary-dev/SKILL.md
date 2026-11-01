@@ -26,25 +26,31 @@ Apply senior-level behaviors rather than relying on a seniority label: trace the
 
 1. Reuse existing APIs and test helpers. Prefer one focused patch; do not refactor neighboring code or add abstractions/files without a clear need.
 2. After the first substantive edit, immediately run the stated focused check before more reading or editing. If it fails, repair that slice and rerun the same check.
-3. Select only relevant repository checks:
+3. Use the BA impact map as a hypothesis. Confirm changed symbols, nearest callers, persistence boundaries, and app/extension targets from code; expand only when a direct dependency or test requires it. Scale checks by risk/impact rather than diff size, while keeping all required project gates.
+4. Select only relevant repository checks:
    - `sh Tests/run_progress_checks.sh` for topics, custom vocabulary, progress, history, backup/review state, or App Group persistence.
    - `sh Tests/run_schedule_checks.sh` for schedule, anchors, active windows, or notification cadence.
    - `sh Tests/run_next_word_intent_checks.sh` for widget Next/Studied App Intent behavior.
    - `sh Tests/run_pronunciation_checks.sh` for pronunciation policy, rendering/playback lifecycle, cancellation, or audio-session behavior.
-4. If a changed Swift file is explicitly listed in `VocabularyWidget.xcodeproj/project.pbxproj`, verify it is added to the correct app, extension, or both target Sources phases. DevOps owns required generic/Simulator builds and their external logs.
-5. For persistence, use `WidgetProgressStore.testDefaults` or another isolated suite. Never seed tests in the live App Group. Validate rejected writes, rollback/readback and caller-visible errors when touched; drain queued async work before asserting no side effects.
-6. Use `apply_patch` for manual edits. Keep comments, docs and tests limited to material behavior and regression risk. Do not change bundle IDs, App Groups, signing, or deployment versions unless explicitly authorized.
+5. If a changed Swift file is explicitly listed in `VocabularyWidget.xcodeproj/project.pbxproj`, verify it is added to the correct app, extension, or both target Sources phases. DevOps owns required generic/Simulator builds and their external logs.
+6. For persistence, use `WidgetProgressStore.testDefaults` or another isolated suite. Never seed tests in the live App Group. Validate rejected writes, rollback/readback and caller-visible errors when touched; drain queued async work before asserting no side effects.
+7. Use `apply_patch` for manual edits. Keep comments, docs and tests limited to material behavior and regression risk. Do not change bundle IDs, App Groups, signing, or deployment versions unless explicitly authorized.
 
 ## Handoff
 
 Return only:
 
 ```text
+Input received from BA:
+Effort / risk observed:
+Confirmed impact surface:
 Root cause / evidence:
-Files and behavior changed:
-Focused checks and exact results:
+Changes:
+Checks and exact results:
 Unverified acceptance:
-DevOps handoff:
+Issues found or encountered:
+Checks selected and impact covered:
+Handoff sent to DevOps:
 ```
 
-Keep the report concise. Distinguish observed runtime behavior from source-level or mocked evidence. Never claim a build, UI path, widget action, or audible result that was not actually verified.
+Keep the complete response under 200 words. Distinguish observed runtime behavior from source-level or mocked evidence. Never claim a build, UI path, widget action, or audible result that was not actually verified.
