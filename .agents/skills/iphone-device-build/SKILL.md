@@ -15,7 +15,7 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 
 ## 1. Preflight
 
-1. Read the current request and preserve all existing source and user data. Check `git status --short` if this project is inside a Git repository; this folder was not a Git repository at the last check.
+1. Read the current request and preserve all existing source and user data. Check `git status --short` and preserve unrelated worktree changes.
 2. Verify Xcode and the currently paired device:
 
    ```bash
@@ -33,6 +33,13 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 - App `com.phanquocviet.VocabularyWidget`, extension `com.phanquocviet.VocabularyWidget.WidgetKit`, App Group `group.com.phanquocviet.VocabularyWidget` (both entitlement files, `Shared/WidgetProgressStore.swift`, `Tests/run_progress_checks.sh`).
 - Device: "PQV IPhone", iPhone 17 Pro Max, UDID `00008150-000215C11E12401C`. It may show `unavailable` until the phone is unlocked/connected; recheck `devicectl list devices`.
 - Release signed build, install, and launch succeeded with these values.
+
+## Build evidence and device-only behavior
+
+- Keep the complete `xcodebuild` log in the build directory outside the source tree. Require both a zero exit code and `** BUILD SUCCEEDED **`; never report a failed build as successful because other checks passed.
+- If a build fails, identify the first actionable diagnostic and classify it as a source, configuration/signing, or toolchain/environment failure. Keep compilation, signing, device availability, installation, and launch outcomes distinct.
+- For behavior that reproduces only on a physical device—especially audio, App Intents, or background execution—capture a persistent device-side log before changing behavior. Copy the log from the device with `devicectl device copy from` and preserve it with the build evidence.
+- Group device log events by `pid` and record how each process was launched (widget intent cold launch, user opening the app, or `devicectl` launch). These paths can behave differently. For widget audio checks, install the app and test by invoking the widget; do not launch the app with `devicectl process launch` first.
 
 ## 2. Build and sign
 
