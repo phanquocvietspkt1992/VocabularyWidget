@@ -125,11 +125,15 @@ struct TopicPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                Text("The widget advances to the next word about every \(WidgetProgressStore.schedule.intervalMinutes) minutes during study hours. iOS may refresh it later.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding()
-                    .frame(maxWidth: .infinity)
-                    .background(.bar)
+                VStack(spacing: 4) {
+                    Text("Version 01.11.2026")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("The widget advances to the next word about every \(WidgetProgressStore.schedule.intervalMinutes) minutes during study hours. iOS may refresh it later.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center).padding()
+                .frame(maxWidth: .infinity)
+                .background(.bar)
             }
         }
     }
