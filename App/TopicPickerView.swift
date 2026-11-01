@@ -1,19 +1,45 @@
 import SwiftUI
 import WidgetKit
 
-private final class TopicSelectionModel: ObservableObject {
+final class TopicSelectionModel: ObservableObject {
     @Published var showingSchedule = false
     @Published var showingBackup = false
     @Published var showingReview = false
     @Published var selectedID = WidgetProgressStore.selectedTopicID
     @Published var now = Date.now
-    @Published var showingResetConfirmation = false
+    @Published var showingResetConfirmation = false {
+        didSet {
+            if showingResetConfirmation { presentedSheets.insert("reset") }
+        }
+    }
+    @Published var showingDeleteTopicConfirmation = false {
+        didSet {
+            if showingDeleteTopicConfirmation { presentedSheets.insert("delete-topic") }
+        }
+    }
     @Published var resetTopicID: String?
+    @Published var deleteTopicID: String?
+    @Published var deleteTopicName: String?
+    @Published var deleteTopicError: String?
     @Published var showingVocabulary = false
     @Published var showingCreateTopic = false
     @Published var topicName = ""
     @Published var topicCreationError: String?
     @Published var refreshID = UUID()
+    @Published var presentedSheets: Set<String> = []
+
+    var blocksWordDetail: Bool {
+        !presentedSheets.isEmpty || showingSchedule || showingBackup || showingReview || showingVocabulary || showingCreateTopic
+            || showingResetConfirmation || showingDeleteTopicConfirmation
+    }
+
+    func trackPresentedSheets() {
+        for (name, showing) in [("schedule", showingSchedule), ("backup", showingBackup), ("review", showingReview),
+                                ("vocabulary", showingVocabulary), ("create", showingCreateTopic),
+                                ("reset", showingResetConfirmation)] where showing {
+            presentedSheets.insert(name)
+        }
+    }
 
     init() {
         WidgetProgressStore.ensureSelectedTopicInitialized()
@@ -22,7 +48,8 @@ private final class TopicSelectionModel: ObservableObject {
 }
 
 struct TopicPickerView: View {
-    @StateObject private var model = TopicSelectionModel()
+    @ObservedObject var model: TopicSelectionModel
+    @ObservedObject var detailRouter: VocabularyDetailRouter
 
     var body: some View {
         NavigationStack {
@@ -60,20 +87,31 @@ struct TopicPickerView: View {
                     } label: {
                         Label("Restart Progress", systemImage: "arrow.counterclockwise")
                     }
+                    if !VocabularyCatalog.builtInTopicIDs.contains(topic.id) {
+                        Divider()
+                        Button(role: .destructive) {
+                            model.deleteTopicID = topic.id
+                            model.deleteTopicName = topic.name
+                            model.deleteTopicError = nil
+                            model.showingDeleteTopicConfirmation = true
+                        } label: {
+                            Label("Delete Topic", systemImage: "trash")
+                        }
+                    }
                 }
             }
             .navigationTitle("Choose a Topic")
-            .sheet(isPresented: $model.showingSchedule, onDismiss: { model.refreshID = UUID(); model.now = .now }) {
+            .sheet(isPresented: $model.showingSchedule, onDismiss: { model.refreshID = UUID(); model.now = .now; drainWordDetail(after: "schedule") }) {
                 VocabularyScheduleSettingsView()
             }
-            .sheet(isPresented: $model.showingBackup) {
+            .sheet(isPresented: $model.showingBackup, onDismiss: { drainWordDetail(after: "backup") }) {
                 VocabularyBackupView {
                     model.selectedID = WidgetProgressStore.selectedTopicID
                     model.now = .now
                     model.refreshID = UUID()
                 }
             }
-            .sheet(isPresented: $model.showingReview) { VocabularyDailyReviewView() }
+            .sheet(isPresented: $model.showingReview, onDismiss: { drainWordDetail(after: "review") }) { VocabularyDailyReviewView() }
             .toolbar {
                 ToolbarItem(placement: .bottomBar) {
                     Button { model.showingSchedule = true } label: { Label("Study Schedule & Notifications", systemImage: "clock") }
@@ -93,10 +131,10 @@ struct TopicPickerView: View {
                     }
                 }
             }
-            .sheet(isPresented: $model.showingVocabulary, onDismiss: { model.refreshID = UUID(); model.now = .now }) {
+            .sheet(isPresented: $model.showingVocabulary, onDismiss: { model.refreshID = UUID(); model.now = .now; drainWordDetail(after: "vocabulary") }) {
                 CustomVocabularyView(topicID: model.selectedID)
             }
-            .sheet(isPresented: $model.showingCreateTopic) {
+            .sheet(isPresented: $model.showingCreateTopic, onDismiss: { drainWordDetail(after: "create") }) {
                 NavigationStack {
                     Form {
                         Section("Topic Name") {
@@ -120,18 +158,66 @@ struct TopicPickerView: View {
                 .presentationDetents([.medium])
             }
             .id(model.refreshID)
-            .alert("Restart this topic?", isPresented: $model.showingResetConfirmation) {
-                Button("Cancel", role: .cancel) { model.resetTopicID = nil }
-                Button("Restart", role: .destructive) {
-                    guard let topicID = model.resetTopicID else { return }
-                    WidgetProgressStore.resetProgress(for: VocabularyCatalog.topic(for: topicID))
-                    model.now = .now
-                    WidgetCenter.shared.reloadAllTimelines()
-                    Task { await VocabularyNotifications.reschedule() }
-                    model.resetTopicID = nil
+            .sheet(isPresented: $model.showingResetConfirmation, onDismiss: {
+                model.resetTopicID = nil
+                drainWordDetail(after: "reset")
+            }) {
+                VStack(spacing: 20) {
+                    Text("Restart this topic?").font(.headline).accessibilityAddTraits(.isHeader)
+                    Text("Saved progress for this topic will be reset to the beginning.")
+                        .multilineTextAlignment(.center)
+                    Button("Restart", role: .destructive) {
+                        if let topicID = model.resetTopicID {
+                            WidgetProgressStore.resetProgress(for: VocabularyCatalog.topic(for: topicID))
+                            model.now = .now
+                            WidgetCenter.shared.reloadAllTimelines()
+                            Task { await VocabularyNotifications.reschedule() }
+                        }
+                        model.resetTopicID = nil
+                        model.showingResetConfirmation = false
+                    }
+                    Button("Cancel", role: .cancel) {
+                        model.resetTopicID = nil
+                        model.showingResetConfirmation = false
+                    }
                 }
-            } message: {
-                Text("Saved progress for this topic will be reset to the beginning.")
+                .padding()
+                .presentationDetents([.height(260)])
+            }
+            .sheet(isPresented: $model.showingDeleteTopicConfirmation, onDismiss: {
+                model.deleteTopicID = nil
+                model.deleteTopicName = nil
+                model.deleteTopicError = nil
+                model.now = .now
+                drainWordDetail(after: "delete-topic")
+            }) {
+                NavigationStack {
+                    VStack(spacing: 20) {
+                        Text("Delete \(model.deleteTopicName ?? "this topic")?")
+                            .font(.headline).accessibilityAddTraits(.isHeader)
+                        Text("This permanently deletes the topic, its words, progress, study history, and review data. This cannot be undone.")
+                            .multilineTextAlignment(.center)
+                        if let error = model.deleteTopicError {
+                            Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Button("Delete Topic", role: .destructive) { deleteCustomTopic() }
+                            .buttonStyle(.borderedProminent)
+                        Button("Cancel", role: .cancel) { model.showingDeleteTopicConfirmation = false }
+                    }
+                    .padding()
+                    .navigationTitle("Delete Topic")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { model.showingDeleteTopicConfirmation = false }
+                        }
+                    }
+                }
+                .presentationDetents([.height(310)])
+            }
+            .onChange(of: [model.showingSchedule, model.showingBackup, model.showingReview,
+                           model.showingVocabulary, model.showingCreateTopic, model.showingResetConfirmation]) { _, _ in
+                model.trackPresentedSheets()
             }
             .task {
                 while !Task.isCancelled {
@@ -152,6 +238,11 @@ struct TopicPickerView: View {
                 .background(.bar)
             }
         }
+    }
+
+    private func drainWordDetail(after sheet: String? = nil) {
+        if let sheet { model.presentedSheets.remove(sheet) }
+        detailRouter.drain(blocked: model.blocksWordDetail)
     }
 
     private var versionLabel: String {
@@ -211,6 +302,20 @@ struct TopicPickerView: View {
             model.topicCreationError = "This topic name already exists. Choose another name."
         } catch {
             model.topicCreationError = "Could not save the topic. Try again."
+        }
+    }
+
+    private func deleteCustomTopic() {
+        guard let topicID = model.deleteTopicID else { return }
+        do {
+            model.selectedID = try CustomTopicStore.delete(id: topicID)
+            model.now = .now
+            model.deleteTopicError = nil
+            model.showingDeleteTopicConfirmation = false
+            WidgetCenter.shared.reloadAllTimelines()
+            Task { await VocabularyNotifications.reschedule() }
+        } catch {
+            model.deleteTopicError = error.localizedDescription
         }
     }
 }

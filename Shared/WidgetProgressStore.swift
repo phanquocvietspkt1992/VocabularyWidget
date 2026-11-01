@@ -41,7 +41,7 @@ enum WidgetProgressStore {
         return true
     }
     private static let selectedKey = "selectedTopic"
-    private static let studyHistoryKey = "studyHistory.v1"
+    fileprivate static let studyHistoryKey = "studyHistory.v1"
     static var testDefaults: UserDefaults?
 
     private static var defaults: UserDefaults {
@@ -168,6 +168,13 @@ enum WidgetProgressStore {
         return records
     }
 
+    static func hasReadableStudyHistory() -> Bool {
+        guard let stored = defaults.object(forKey: studyHistoryKey) else { return true }
+        guard let data = stored as? Data,
+              (try? JSONDecoder().decode([StudyHistoryRecord].self, from: data)) != nil else { return false }
+        return true
+    }
+
     static func studiedWordIDs(for topicID: String) -> Set<String> {
         Set(allStudyHistory().lazy.filter { $0.topicID == topicID }.map(\.wordID))
     }
@@ -225,6 +232,18 @@ enum CustomTopicStore {
         case emptyName, duplicateName, storageFailure
     }
 
+    enum DeleteError: LocalizedError {
+        case builtInTopic
+        case notFound
+
+        var errorDescription: String? {
+            switch self {
+            case .builtInTopic: return "Built-in topics cannot be deleted."
+            case .notFound: return "This custom topic no longer exists."
+            }
+        }
+    }
+
     private static let storageKey = "customTopics.v1"
     private static var defaults: UserDefaults {
         if let testDefaults = WidgetProgressStore.testDefaults { return testDefaults }
@@ -260,6 +279,66 @@ enum CustomTopicStore {
         return topic
     }
 
+    @discardableResult
+    static func delete(id: String, at date: Date = .now,
+                       writer: ((String, Any?) throws -> Void)? = nil,
+                       reader: (() throws -> [String: Any])? = nil) throws -> String {
+        guard !VocabularyCatalog.builtInTopicIDs.contains(id) else { throw DeleteError.builtInTopic }
+        guard VocabularyLearningStore.validDate(date) else { throw LearningStorageError.invalidBackup }
+
+        let previous = try VocabularyLearningStore.rawSnapshot()
+        var replacement = previous
+        guard let topicData = replacement[storageKey] as? Data else { throw DeleteError.notFound }
+        let topics = try JSONDecoder().decode([Topic].self, from: topicData)
+        guard topics.contains(where: { $0.id == id }) else { throw DeleteError.notFound }
+        let remainingTopics = topics.filter { $0.id != id }
+        if remainingTopics.isEmpty { replacement.removeValue(forKey: storageKey) }
+        else { replacement[storageKey] = try JSONEncoder().encode(remainingTopics) }
+
+        if let vocabularyData = replacement[CustomVocabularyStore.storageKey] as? Data {
+            var vocabulary = try JSONDecoder().decode([String: [VocabularyWord]].self, from: vocabularyData)
+            vocabulary.removeValue(forKey: id)
+            if vocabulary.isEmpty { replacement.removeValue(forKey: CustomVocabularyStore.storageKey) }
+            else { replacement[CustomVocabularyStore.storageKey] = try JSONEncoder().encode(vocabulary) }
+        }
+
+        if let historyData = replacement[WidgetProgressStore.studyHistoryKey] as? Data {
+            let history = try JSONDecoder().decode([StudyHistoryRecord].self, from: historyData)
+                .filter { $0.topicID != id }
+            if history.isEmpty { replacement.removeValue(forKey: WidgetProgressStore.studyHistoryKey) }
+            else { replacement[WidgetProgressStore.studyHistoryKey] = try JSONEncoder().encode(history) }
+        }
+
+        if let reviewData = replacement["review.v1"] as? Data {
+            var review = try JSONDecoder().decode(VocabularyReviewState.self, from: reviewData)
+            review.records.removeAll { $0.identity.topicID == id }
+            review.attempts.removeAll { $0.identity.topicID == id }
+            if review.records.isEmpty && review.attempts.isEmpty { replacement.removeValue(forKey: "review.v1") }
+            else { replacement["review.v1"] = try JSONEncoder().encode(review) }
+        }
+
+        for prefix in ["progress.", "anchor.", "visited."] {
+            replacement.removeValue(forKey: prefix + id)
+        }
+
+        let newSelection: String
+        if replacement["selectedTopic"] as? String == id {
+            guard let fallback = VocabularyCatalog.topics.first(where: { VocabularyCatalog.builtInTopicIDs.contains($0.id) }) else {
+                throw LearningStorageError.invalidBackup
+            }
+            newSelection = fallback.id
+            replacement["selectedTopic"] = fallback.id
+            replacement["anchor.\(fallback.id)"] = date
+            replacement["visited.\(fallback.id)"] = true
+        } else {
+            newSelection = replacement["selectedTopic"] as? String ?? VocabularyCatalog.topics[0].id
+        }
+
+        try VocabularyLearningStore.validate(replacement)
+        try VocabularyLearningStore.replace(replacement, previous: previous, writer: writer, reader: reader)
+        return newSelection
+    }
+
     private static func normalized(_ value: String) -> String {
         value.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
     }
@@ -280,7 +359,7 @@ enum CustomVocabularyStore {
         let issues: [BatchIssue]
     }
 
-    private static let storageKey = "customVocabularyByTopic.v1"
+    fileprivate static let storageKey = "customVocabularyByTopic.v1"
     private static var defaults: UserDefaults {
         if let testDefaults = WidgetProgressStore.testDefaults { return testDefaults }
         guard let sharedDefaults = UserDefaults(suiteName: WidgetProgressStore.appGroupID) else {
@@ -361,7 +440,7 @@ enum CustomVocabularyStore {
         return BatchResult(added: accepted, issues: issues)
     }
 
-    private static func validate(text: String, partOfSpeech: String, meaning: String, examples: [String]) throws {
+    static func validate(text: String, partOfSpeech: String, meaning: String, examples: [String]) throws {
         let allowedPartsOfSpeech = ["(n)", "(v)", "(adj)", "(adv)", "(prep)", "(conj)", "(pron)", "(interj)"]
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AddError.invalidWord }
         guard allowedPartsOfSpeech.contains(partOfSpeech) else { throw AddError.invalidPartOfSpeech }
@@ -369,7 +448,7 @@ enum CustomVocabularyStore {
         guard examples.count == 5, examples.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw AddError.invalidExamples }
     }
 
-    private static func loadAll() throws -> [String: [VocabularyWord]] {
+    static func loadAll() throws -> [String: [VocabularyWord]] {
         guard let stored = defaults.object(forKey: storageKey) else { return [:] }
         guard let data = stored as? Data,
               let decoded = try? JSONDecoder().decode([String: [VocabularyWord]].self, from: data) else { throw AddError.storageFailure }

@@ -48,6 +48,11 @@ private struct VocabularyWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: VocabularyEntry
 
+    private var detailURL: URL {
+        guard let word = entry.word else { return WordDetailRoute.rootURL }
+        return VocabularyWordIdentity(topicID: entry.topicID, index: entry.position - 1, text: word.text).url
+    }
+
     var body: some View {
         if family == .accessoryRectangular {
             accessoryView
@@ -81,6 +86,7 @@ private struct VocabularyWidgetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .foregroundStyle(.primary)
         .containerBackground(.clear, for: .widget)
+        .widgetURL(detailURL)
     }
 
     private var homeScreenView: some View {
@@ -163,6 +169,7 @@ private struct VocabularyWidgetView: View {
             LinearGradient(colors: [Color(red: 0.08, green: 0.16, blue: 0.31), Color(red: 0.12, green: 0.30, blue: 0.48)], startPoint: .topLeading, endPoint: .bottomTrailing),
             for: .widget
         )
+        .widgetURL(detailURL)
     }
 }
 
@@ -206,7 +213,63 @@ struct StudiedWordIntent: AppIntent {
     }
 }
 
+private struct VocabularyExamplesWidgetView: View {
+    let entry: VocabularyEntry
+
+    private var detailURL: URL {
+        guard let word = entry.word else { return WordDetailRoute.rootURL }
+        return VocabularyWordIdentity(topicID: entry.topicID, index: entry.position - 1, text: word.text).url
+    }
+
+    var body: some View {
+        if let word = entry.word {
+            Link(destination: detailURL) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(word.examples.enumerated()), id: \.offset) { index, example in
+                        Text(example)
+                            .font(.caption)
+                            .italic()
+                            .foregroundStyle(.white.opacity(0.86))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .containerBackground(
+                    LinearGradient(colors: [Color(red: 0.08, green: 0.16, blue: 0.31), Color(red: 0.12, green: 0.30, blue: 0.48)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    for: .widget
+                )
+            }
+        } else {
+            VStack(alignment: .center, spacing: 8) {
+                Spacer(minLength: 0)
+                Text("No words in this topic")
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                Link(destination: WordDetailRoute.rootURL) {
+                    Text("Open the app to add vocabulary")
+                        .font(.caption).foregroundStyle(.white.opacity(0.78))
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .containerBackground(
+                LinearGradient(colors: [Color(red: 0.08, green: 0.16, blue: 0.31), Color(red: 0.12, green: 0.30, blue: 0.48)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                for: .widget
+            )
+        }
+    }
+}
+
 @main
+struct VocabularyWidgets: WidgetBundle {
+    var body: some Widget {
+        VocabularyWidget()
+        VocabularyExamplesWidget()
+    }
+}
+
 struct VocabularyWidget: Widget {
     let kind = "VocabularyWidget"
 
@@ -217,5 +280,18 @@ struct VocabularyWidget: Widget {
         .configurationDisplayName("Vocabulary Widget")
         .description("Learn one word from your selected topic.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+    }
+}
+
+struct VocabularyExamplesWidget: Widget {
+    let kind = "VocabularyExamplesWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: VocabularyTimelineProvider()) { entry in
+            VocabularyExamplesWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Word Examples")
+        .description("View all 5 examples of the current word.")
+        .supportedFamilies([.systemMedium])
     }
 }

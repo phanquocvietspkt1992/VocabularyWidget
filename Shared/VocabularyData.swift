@@ -466,6 +466,28 @@ enum VocabularyCatalog {
         baseTopics.first(where: { $0.id == topicID })?.words.map(\.text) ?? []
     }
 
+    static func detailTopics() throws -> [VocabularyTopic] {
+        let customTopics = try CustomTopicStore.loadTopics()
+        let customWords = try CustomVocabularyStore.loadAll()
+        let ids = baseTopics.map(\.id) + customTopics.map(\.id)
+        guard Set(ids).count == ids.count,
+              customTopics.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw CustomTopicStore.CreateError.storageFailure
+        }
+        for words in customWords.values {
+            for word in words {
+                try CustomVocabularyStore.validate(text: word.text, partOfSpeech: word.partOfSpeech,
+                                                   meaning: word.meaning, examples: word.examples)
+            }
+        }
+        return baseTopics.map { topic in
+            VocabularyTopic(id: topic.id, name: topic.name, words: topic.words.map { word in
+                VocabularyWord(text: word.text, partOfSpeech: word.partOfSpeech, meaning: word.meaning,
+                               examples: [word.example] + (VocabularyExtraExamples.byTopic[topic.id]?[word.text] ?? []))
+            } + (customWords[topic.id] ?? []))
+        } + customTopics.map { VocabularyTopic(id: $0.id, name: $0.name, words: customWords[$0.id] ?? []) }
+    }
+
     static func topic(for id: String?) -> VocabularyTopic {
         topics.first(where: { $0.id == id }) ?? topics[0]
     }

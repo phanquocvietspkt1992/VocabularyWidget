@@ -13,6 +13,11 @@ grep -Fq "static let appGroupID = \"$GROUP_ID\"" "$ROOT/Shared/WidgetProgressSto
 grep -Fq "<string>$GROUP_ID</string>" "$ROOT/App/VocabularyWidget.entitlements"
 grep -Fq "<string>$GROUP_ID</string>" "$ROOT/Widget/VocabularyWidgetExtension.entitlements"
 
+awk '/^struct VocabularyWordDetailView: View/ { exit } { print }' \
+  "$ROOT/App/VocabularyWordDetailView.swift" > "$OUTPUT_DIR/DetailPresentation.swift"
+awk '/^struct TopicPickerView: View/ { exit } { print }' \
+  "$ROOT/App/TopicPickerView.swift" > "$OUTPUT_DIR/TopicSelectionModel.swift"
+
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT/Shared/VocabularyExtraExamples.swift" \
@@ -21,6 +26,9 @@ swiftc \
   "$ROOT/Shared/VocabularyData.swift" \
   "$ROOT/Shared/WidgetProgressStore.swift" \
   "$ROOT/Shared/VocabularyLearningStore.swift" \
+  "$ROOT/Shared/VocabularyWordDetail.swift" \
+  "$OUTPUT_DIR/DetailPresentation.swift" \
+  "$OUTPUT_DIR/TopicSelectionModel.swift" \
   "$ROOT/Tests/ProgressStoreChecks.swift" \
   -o "$OUTPUT"
 "$OUTPUT"

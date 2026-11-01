@@ -1,8 +1,246 @@
 import Foundation
 
+struct SpeakWordIntent {
+    let word: String
+    func perform() async throws { fatalError("Detail playback checks must inject their performer.") }
+}
+
 @main
 struct ProgressStoreChecks {
     private static var checksPassed = 0
+
+    @MainActor
+    private static func checkDetailPresentation(_ suite: UserDefaults) {
+        let topic = VocabularyCatalog.topics[0]
+        let identity = VocabularyWordIdentity(topicID: topic.id, index: 0, text: topic.words[0].text)
+        let model = TopicSelectionModel()
+        let router = VocabularyDetailRouter()
+        let before = suite.dictionaryRepresentation()
+        var cancellations = 0
+        let owner = UUID()
+        router.registerPlayback(owner: owner) { cancellations += 1 }
+        router.open(identity.url, blocked: false)
+        let firstID = router.state.detail!.id
+        router.open(URL(string: "https://example.com")!, blocked: false)
+        check(router.state.detail?.id == firstID && cancellations == 1, "production handler ignores foreign URL without audio cancellation")
+        router.open(identity.url, blocked: true)
+        router.open(WordDetailRoute.rootURL, blocked: true)
+        router.drain(blocked: true)
+        check(router.state.detail?.id == firstID && cancellations == 1, "production handler queues latest root without dismissing a modal")
+        router.drain(blocked: false)
+        check(router.state.detail == nil && cancellations == 2, "production handler drains root after modal dismissal")
+        router.open(identity.url, blocked: false)
+        let repeatedID = router.state.detail!.id
+        router.open(identity.url, blocked: false)
+        check(router.state.detail?.id != repeatedID && cancellations == 4, "production repeated URL cancels playback before fresh detail")
+        router.unregisterPlayback(owner: UUID())
+        router.close()
+        check(cancellations == 5, "old view cannot unregister new playback owner")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: before), "production URL opening/queue/close has no defaults writes")
+
+          let modalBaseline = suite.dictionaryRepresentation()
+          for route in [identity.url, WordDetailRoute.rootURL] {
+            let queuedRouter = VocabularyDetailRouter()
+            queuedRouter.open(identity.url, blocked: false)
+            let displayedID = queuedRouter.state.detail!.id
+            model.resetTopicID = topic.id
+            model.showingResetConfirmation = true
+            check(model.blocksWordDetail && model.presentedSheets.contains("reset"), "reset toggle immediately retains native presentation blocker")
+            queuedRouter.open(identity.url, blocked: model.blocksWordDetail)
+            queuedRouter.open(route, blocked: model.blocksWordDetail)
+            check(model.showingResetConfirmation && model.resetTopicID == topic.id && queuedRouter.state.detail?.id == displayedID,
+                "queued latest link does not drop active reset confirmation")
+            model.resetTopicID = nil
+            model.showingResetConfirmation = false
+            model.trackPresentedSheets()
+            Task { @MainActor in
+                await Task.yield()
+                queuedRouter.drain(blocked: model.blocksWordDetail)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            check(model.blocksWordDetail && queuedRouter.state.pending == WordDetailRoute.parse(route) && queuedRouter.state.detail?.id == displayedID,
+                "reset binding false and scheduler yield cannot drain during native dismissal")
+            check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: modalBaseline), "reset Cancel and pending app-close link write no defaults")
+            model.presentedSheets.remove("reset")
+            queuedRouter.drain(blocked: model.blocksWordDetail)
+            check(!model.blocksWordDetail && queuedRouter.state.pending == nil,
+                "reset onDismiss releases blocker and consumes latest route")
+            check(route == WordDetailRoute.rootURL ? queuedRouter.state.detail == nil : queuedRouter.state.detail?.id != displayedID,
+                "actual reset dismissal applies queued app-close or fresh word detail")
+            check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: modalBaseline), "actual reset dismissal and queued detail routing write no defaults")
+          }
+
+          let deleteRouter = VocabularyDetailRouter()
+          deleteRouter.open(identity.url, blocked: false)
+          let detailBeforeDeletePrompt = deleteRouter.state.detail!.id
+          model.deleteTopicID = "custom_delete-pending"
+          model.deleteTopicName = "Delete Pending"
+          model.showingDeleteTopicConfirmation = true
+          check(model.blocksWordDetail && model.presentedSheets.contains("delete-topic"),
+              "delete confirmation immediately blocks detail presentation")
+          deleteRouter.open(WordDetailRoute.rootURL, blocked: model.blocksWordDetail)
+          model.showingDeleteTopicConfirmation = false
+          check(model.blocksWordDetail && deleteRouter.state.pending == .root && deleteRouter.state.detail?.id == detailBeforeDeletePrompt,
+              "queued detail link remains blocked until delete sheet onDismiss")
+          model.deleteTopicID = nil
+          model.deleteTopicName = nil
+          model.presentedSheets.remove("delete-topic")
+          deleteRouter.drain(blocked: model.blocksWordDetail)
+          check(!model.blocksWordDetail && deleteRouter.state.pending == nil && deleteRouter.state.detail == nil,
+              "delete sheet dismissal drains the latest queued app-close link")
+
+        let playback = VocabularyDetailPlayback()
+        var starts = 0
+        playback.speak("inactive", perform: { _ in starts += 1 })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(starts == 0 && !playback.isSpeaking, "inactive host cannot start detail audio")
+        playback.isActive = true
+        playback.speak("cancel before start", perform: { _ in starts += 1 })
+        playback.isActive = false
+        playback.cancel()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(starts == 0 && !playback.isSpeaking, "scene cancellation before queued task prevents background start")
+        playback.isActive = true
+        var oldCompletion: CheckedContinuation<Void, Error>?
+        var newCompletion: CheckedContinuation<Void, Error>?
+        playback.speak("first", perform: { _ in
+            starts += 1
+            try await withCheckedThrowingContinuation { oldCompletion = $0 }
+        })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(starts == 1 && playback.isSpeaking && oldCompletion != nil, "explicit Speak starts injected performer and shows loading")
+        playback.speak("second", perform: { _ in
+            starts += 1
+            try await withCheckedThrowingContinuation { newCompletion = $0 }
+        })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        oldCompletion?.resume(throwing: NSError(domain: "DetailTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Old error"]))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(starts == 2 && playback.isSpeaking && playback.errorMessage == nil, "late canceled completion cannot clear loading or set old error on new word")
+        newCompletion?.resume(throwing: NSError(domain: "DetailTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "Actual audio failure"]))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(!playback.isSpeaking && playback.errorMessage == "Actual audio failure", "current performer error is shown verbatim")
+        playback.cancel()
+        check(!playback.isSpeaking && playback.errorMessage == nil, "close/advance/new-route cancellation clears local audio status")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: before), "detail audio status never changes progress or selection")
+    }
+
+    private static func checkWordDetail(_ suite: UserDefaults) {
+        let topic = VocabularyCatalog.topics[0]
+        let identity = VocabularyWordIdentity(topicID: topic.id, index: 0, text: topic.words[0].text)
+        let special = VocabularyWordIdentity(topicID: "chủ đề +%&/?", index: 12, text: "café + 50% &?#")
+        check(WordDetailRoute.parse(special.url) == .word(special), "detail URLs round trip Unicode, spaces, percent and literal plus")
+        check(WordDetailRoute.parse(WordDetailRoute.rootURL) == .root, "root URL accepted")
+        let valid = identity.url.absoluteString
+        for raw in [valid + "&v=1", valid + "&extra=x", valid.replacingOccurrences(of: "v=1", with: "v=2"),
+                    valid.replacingOccurrences(of: "index=0", with: "index=-1"),
+                    valid.replacingOccurrences(of: "index=0", with: "index=999999999999999999999999"),
+                    valid.replacingOccurrences(of: "&text=colleague", with: ""),
+                    valid + "#fragment", valid.replacingOccurrences(of: "//word", with: "//user@word"),
+                    valid.replacingOccurrences(of: "//word", with: "//word:80"),
+                    valid.replacingOccurrences(of: "//word", with: "//word:"),
+                    "vocabularywidget-word://app:/",
+                    valid.replacingOccurrences(of: "/detail", with: "/%64etail"),
+                    valid.replacingOccurrences(of: "/detail", with: "/other"),
+                    valid.replacingOccurrences(of: "//word", with: "//other"),
+                    valid.replacingOccurrences(of: WordDetailRoute.scheme, with: "foreign"),
+                    valid + "%", valid + "%GG"] {
+            check(WordDetailRoute.parse(raw) == nil, "strict route rejects \(raw)")
+        }
+        let before = suite.dictionaryRepresentation()
+        var session = VocabularyDetailSession(identity: identity)
+        check(session.snapshot?.word.examples.count == 5, "detail loads all five current examples")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: before), "opening detail writes nothing")
+        let originalGeneration = session.generation
+        var callbacks = 0
+        check(!session.advance(markLearned: false, selectedID: { "other" }, onSuccess: { callbacks += 1 }), "other active topic blocks action")
+        check(session.identity == identity && callbacks == 0 && !session.acceptsCompletion(originalGeneration), "blocked action preserves snapshot and invalidates old completion")
+        suite.set(topic.id, forKey: "selectedTopic")
+        let saved = suite.dictionaryRepresentation()
+        check(!session.advance(markLearned: false, advance: { _, _, _ in false }, onSuccess: { callbacks += 1 }), "rejected advance reports failure")
+        check(!session.advance(markLearned: true, mark: { _, _, _, _ in false }, onSuccess: { callbacks += 1 }), "rejected mark reports failure")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(session.identity == identity && callbacks == 0 && NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: saved), "false callbacks preserve snapshot and defaults with no queued effects")
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        suite.set(20, forKey: "progress.\(topic.id)")
+        suite.set(date.addingTimeInterval(-3600), forKey: "anchor.\(topic.id)")
+        check(session.advance(markLearned: false, at: date, onSuccess: { callbacks += 1 }), "advance accepts old displayed index")
+        check(session.identity.index == 1 && suite.integer(forKey: "progress.\(topic.id)") == 1 && suite.object(forKey: "anchor.\(topic.id)") as? Date == date && callbacks == 1, "Next advances from displayed index and anchors at action date")
+        let detailNextState = suite.dictionaryRepresentation()
+        check(WidgetProgressStore.advanceDisplayedWord(topicID: topic.id, displayedIndex: 0, at: date), "widget advance comparison accepted")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: detailNextState), "detail Next and widget advance produce identical raw state")
+        session = VocabularyDetailSession(identity: VocabularyWordIdentity(topicID: topic.id, index: topic.words.count - 1, text: topic.words.last!.text))
+        check(session.advance(markLearned: false, at: date) && session.identity == identity, "detail Next wraps final displayed index to zero")
+        session = VocabularyDetailSession(identity: identity)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 7 * 3600)!
+        for _ in 0..<2 {
+            session = VocabularyDetailSession(identity: identity)
+            check(session.advance(markLearned: true, at: date, calendar: calendar), "mark accepts displayed identity")
+        }
+        check(WidgetProgressStore.allStudyHistory().count == 1 && WidgetProgressStore.allStudyHistory()[0].day == WidgetProgressStore.dayKey(for: date, calendar: calendar), "mark deduplicates topic/text/local day")
+        let detailMarkState = suite.dictionaryRepresentation()
+        check(WidgetProgressStore.markStudiedAndAdvance(topicID: topic.id, displayedIndex: 0, at: date, calendar: calendar), "widget mark comparison accepted")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: detailMarkState), "detail Mark and widget mark produce identical raw history/progress/anchor state")
+        suite.set(Data("broken".utf8), forKey: "studyHistory.v1")
+        session = VocabularyDetailSession(identity: identity)
+        let corruptHistory = suite.dictionaryRepresentation()
+        check(!session.advance(markLearned: true, at: date), "corrupt history rejects mark")
+        check(!session.advance(markLearned: false, at: date), "corrupt history rejects detail Next too")
+        check(session.identity == identity && NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: corruptHistory), "corrupt history leaves snapshot and state unchanged")
+        suite.removeObject(forKey: "studyHistory.v1")
+        suite.set(Data("broken".utf8), forKey: "review.v1")
+        check(VocabularyDetailSession(identity: identity).snapshot != nil, "unrelated corrupt review does not block detail")
+        suite.removeObject(forKey: "review.v1")
+        let duplicate = VocabularyWord(text: identity.text, partOfSpeech: "(n)", meaning: "Different meaning", examples: Array(repeating: "Custom example", count: 5))
+        suite.set(try! JSONEncoder().encode([topic.id: [duplicate]]), forKey: "customVocabularyByTopic.v1")
+        let duplicateIdentity = VocabularyWordIdentity(topicID: topic.id, index: topic.words.count, text: identity.text)
+        check(VocabularyDetailSession(identity: duplicateIdentity).snapshot?.word.meaning == duplicate.meaning, "same text at distinct catalog indices resolves full tuple")
+        check(VocabularyDetailSession(identity: identity).snapshot?.word.meaning == topic.words[0].meaning, "built-in duplicate keeps built-in fields")
+        let composed = VocabularyWordIdentity(topicID: "unicode", index: 0, text: "\u{00E9}")
+        let decomposedWord = VocabularyWord(text: "e\u{0301}", partOfSpeech: "(n)", meaning: "Accent", examples: Array(repeating: "Example", count: 5))
+        check(composed.resolve(in: [VocabularyTopic(id: "unicode", name: "Unicode", words: [decomposedWord])]) == nil, "exact word identity does not normalize Unicode")
+        let frozen = session.snapshot?.word
+        suite.set(try! JSONEncoder().encode([topic.id: [] as [VocabularyWord]]), forKey: "customVocabularyByTopic.v1")
+        var removedSession = VocabularyDetailSession(identity: duplicateIdentity)
+        check(removedSession.snapshot == nil && !removedSession.advance(markLearned: false, at: date), "deleted custom index is unavailable and cannot advance")
+        check(session.snapshot?.word == frozen, "catalog edits do not replace a displayed snapshot")
+        suite.set(Data("broken".utf8), forKey: "customVocabularyByTopic.v1")
+        check(VocabularyDetailSession(identity: identity).snapshot == nil, "corrupt custom word dictionary does not fall back")
+        suite.removeObject(forKey: "customVocabularyByTopic.v1")
+        for invalid in [VocabularyWordIdentity(topicID: "missing", index: 0, text: identity.text),
+                        VocabularyWordIdentity(topicID: topic.id, index: 5000, text: identity.text),
+                        VocabularyWordIdentity(topicID: topic.id, index: 1, text: identity.text),
+                        VocabularyWordIdentity(topicID: " " + topic.id, index: 0, text: identity.text)] {
+            check(VocabularyDetailSession(identity: invalid).snapshot == nil, "missing, stale and unnormalized identities do not fall back")
+        }
+        suite.set(try! JSONEncoder().encode([CustomTopicStore.Topic(id: topic.id, name: "Collision")]), forKey: "customTopics.v1")
+        check(VocabularyDetailSession(identity: identity).snapshot == nil, "duplicate topic IDs reject catalog")
+        suite.set(Data("broken".utf8), forKey: "customTopics.v1")
+        let broken = suite.dictionaryRepresentation()
+        session = VocabularyDetailSession(identity: identity)
+        check(session.snapshot == nil && !session.advance(markLearned: false, at: date), "corrupt catalog blocks resolution and advance")
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: broken), "corrupt catalog action writes nothing")
+        suite.removeObject(forKey: "customTopics.v1")
+        suite.removeObject(forKey: "customVocabularyByTopic.v1")
+        var router = VocabularyDetailRoutingState()
+        var cancellations = 0
+        router.receive(.word(identity), blocked: false, cancelPlayback: { cancellations += 1 })
+        let firstID = router.detail!.id
+        router.receive(.word(identity), blocked: true)
+        router.receive(.word(duplicateIdentity), blocked: true)
+        check(router.detail?.id == firstID && router.pending == .word(duplicateIdentity), "blocked modals retain detail and only latest pending link")
+        router.drain(blocked: true)
+        check(router.detail?.id == firstID, "drain cannot dismiss another modal")
+        router.drain(blocked: false, cancelPlayback: { cancellations += 1 })
+        check(router.detail?.identity == duplicateIdentity && router.detail?.id != firstID && cancellations == 2, "drained link gets fresh presentation and cancels playback")
+        router.receive(.word(identity), blocked: false)
+        let repeatID = router.detail!.id
+        router.receive(.word(identity), blocked: false)
+        check(router.detail?.id != repeatID, "repeated URL creates fresh detail")
+        router.receive(.root, blocked: false, cancelPlayback: { cancellations += 1 })
+        check(router.detail == nil && router.pending == nil && cancellations == 3, "root closes only detail and cancels playback")
+    }
 
     private static func checkBackupCore(_ suite: UserDefaults) {
         let broken = Data("[{]".utf8)
@@ -334,6 +572,123 @@ struct ProgressStoreChecks {
         check(session.reviewedToday == 0 && !session.revealed && session.cardID != staleCard, "local day rollover resets selected-topic count and hides the stale card")
     }
 
+    private static func checkCustomTopicDeletion(_ suite: UserDefaults) {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let calendar = Calendar(identifier: .gregorian)
+        let day = WidgetProgressStore.dayKey(for: date, calendar: calendar)
+        let selected = try! CustomTopicStore.create(name: "Delete Selected")
+        let retained = try! CustomTopicStore.create(name: "Keep This Topic")
+        let empty = try! CustomTopicStore.create(name: "Delete Empty")
+        let builtIn = VocabularyCatalog.topics[0]
+        let examples = ["Example one.", "Example two.", "Example three.", "Example four.", "Example five."]
+        func addWord(_ text: String, to topicID: String) {
+            try! CustomVocabularyStore.add(text: text, partOfSpeech: "(n)", meaning: "từ thử", examples: examples, to: topicID)
+        }
+        addWord("selected-only", to: selected.id)
+        addWord("retained-word", to: retained.id)
+        addWord("built-in-user-word", to: builtIn.id)
+
+        WidgetProgressStore.selectedTopicID = selected.id
+        for (topicID, index) in [(selected.id, 4), (retained.id, 2), (builtIn.id, 3)] {
+            suite.set(index, forKey: "progress.\(topicID)")
+            suite.set(date, forKey: "anchor.\(topicID)")
+            suite.set(true, forKey: "visited.\(topicID)")
+        }
+        let histories = [selected.id, retained.id, builtIn.id].map {
+            StudyHistoryRecord(topicID: $0, wordID: "shared-history-word", day: day, studiedAt: date)
+        }
+        suite.set(try! JSONEncoder().encode(histories), forKey: "studyHistory.v1")
+        var review = VocabularyReviewState()
+        review.records = [selected.id, retained.id, builtIn.id].map {
+            VocabularyReviewRecord(identity: ReviewIdentity(topicID: $0, wordID: "review-word"), stage: 1,
+                                   dueAt: date.addingTimeInterval(86_400), reviewedAt: date)
+        }
+        review.attempts = [selected.id, retained.id, builtIn.id].map {
+            VocabularyReviewAttempt(id: UUID(), identity: ReviewIdentity(topicID: $0, wordID: "review-word"), grade: .remember, at: date)
+        }
+        suite.set(try! JSONEncoder().encode(review), forKey: "review.v1")
+        suite.set("preserve", forKey: "unrelated.preference")
+
+        let fallbackID = VocabularyCatalog.topics[0].id
+        let newSelection = try! CustomTopicStore.delete(id: selected.id, at: date)
+        check(newSelection == fallbackID && WidgetProgressStore.selectedTopicID == fallbackID,
+              "deleting the selected custom topic selects the first built-in topic")
+        check(CustomTopicStore.topics == [retained, empty], "topic deletion preserves remaining custom topic order")
+        check(CustomVocabularyStore.words(for: selected.id).isEmpty
+              && CustomVocabularyStore.words(for: retained.id).map(\.text) == ["retained-word"]
+              && CustomVocabularyStore.words(for: builtIn.id).map(\.text).contains("built-in-user-word"),
+              "topic deletion removes only that topic's words")
+        check(suite.object(forKey: "progress.\(selected.id)") == nil
+              && suite.object(forKey: "anchor.\(selected.id)") == nil
+              && suite.object(forKey: "visited.\(selected.id)") == nil,
+              "topic deletion removes its progress, anchor and visited flag")
+        check(suite.integer(forKey: "progress.\(retained.id)") == 2
+              && suite.integer(forKey: "progress.\(builtIn.id)") == 3
+              && suite.object(forKey: "anchor.\(fallbackID)") as? Date == date
+              && suite.bool(forKey: "visited.\(fallbackID)"),
+              "topic deletion preserves other progress and anchors the fallback")
+        let historyAfterDelete = try! JSONDecoder().decode([StudyHistoryRecord].self, from: suite.data(forKey: "studyHistory.v1")!)
+        check(historyAfterDelete.map(\.topicID).sorted() == [retained.id, builtIn.id].sorted(),
+              "topic deletion removes only its study history")
+        let reviewAfterDelete = try! JSONDecoder().decode(VocabularyReviewState.self, from: suite.data(forKey: "review.v1")!)
+        check(reviewAfterDelete.records.map(\.identity.topicID).sorted() == [retained.id, builtIn.id].sorted()
+              && reviewAfterDelete.attempts.map(\.identity.topicID).sorted() == [retained.id, builtIn.id].sorted(),
+              "topic deletion removes only its review records and attempts")
+        check(suite.string(forKey: "unrelated.preference") == "preserve", "topic deletion preserves unrelated defaults")
+        check((try? VocabularyLearningStore.exportBackup()) != nil, "backup remains valid after deleting a topic")
+
+        let beforeRejectedDelete = suite.dictionaryRepresentation()
+        do {
+            _ = try CustomTopicStore.delete(id: builtIn.id, at: date)
+            check(false, "built-in topic deletion is rejected")
+        } catch CustomTopicStore.DeleteError.builtInTopic {
+            check(true, "built-in topic deletion is rejected")
+        } catch { check(false, "built-in topic deletion reports the correct error") }
+        do {
+            _ = try CustomTopicStore.delete(id: "custom_missing", at: date)
+            check(false, "missing custom topic deletion is rejected")
+        } catch CustomTopicStore.DeleteError.notFound {
+            check(true, "missing custom topic deletion is rejected")
+        } catch { check(false, "missing custom topic deletion reports the correct error") }
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: beforeRejectedDelete),
+              "rejected built-in and missing topic deletions write nothing")
+
+        let beforeWriteFailure = suite.dictionaryRepresentation()
+        var injectedFailure = false
+        do {
+            _ = try CustomTopicStore.delete(id: retained.id, at: date, writer: { key, value in
+                if key == "progress.\(retained.id)" && value == nil && !injectedFailure {
+                    injectedFailure = true
+                    throw LearningStorageError.writeFailed
+                }
+                if let value { suite.set(value, forKey: key) }
+                else { suite.removeObject(forKey: key) }
+            }, reader: {
+                suite.dictionaryRepresentation().filter { VocabularyLearningStore.owns($0.key) }
+            })
+            check(false, "failed topic-delete write is rejected")
+        } catch LearningStorageError.writeFailed {
+            check(injectedFailure, "failed topic-delete write is rejected")
+        } catch { check(false, "failed topic deletion reports a write error") }
+        check(NSDictionary(dictionary: suite.dictionaryRepresentation()).isEqual(to: beforeWriteFailure)
+              && CustomTopicStore.topics.contains(where: { $0.id == retained.id }),
+              "failed topic deletion rolls all saved topic data back")
+
+        let validTopics = suite.data(forKey: "customTopics.v1")!
+        let unreadable = Data("broken".utf8)
+        suite.set(unreadable, forKey: "customTopics.v1")
+        do {
+            _ = try CustomTopicStore.delete(id: retained.id, at: date)
+            check(false, "topic deletion refuses unreadable source storage")
+        } catch LearningStorageError.unreadableStorage {
+            check(true, "topic deletion refuses unreadable source storage")
+        } catch { check(false, "unreadable topic storage reports the correct error") }
+        check(suite.data(forKey: "customTopics.v1") == unreadable, "rejected deletion preserves unreadable topic bytes")
+        suite.set(validTopics, forKey: "customTopics.v1")
+        _ = try! CustomTopicStore.delete(id: empty.id, at: date)
+        check(!CustomTopicStore.topics.contains(where: { $0.id == empty.id }), "empty custom topics can be deleted")
+    }
+
     static func main() {
         let testSuiteID = "VocabularyWidget.ProgressStoreChecks.\(UUID().uuidString)"
         let suite = HistoryTrackingDefaults(suiteName: testSuiteID)!
@@ -342,6 +697,10 @@ struct ProgressStoreChecks {
         realAppGroupDefaults.set("keep", forKey: protectedKey)
         WidgetProgressStore.testDefaults = suite
         suite.removePersistentDomain(forName: testSuiteID)
+        checkWordDetail(suite)
+        suite.removePersistentDomain(forName: testSuiteID)
+        MainActor.assumeIsolated { checkDetailPresentation(suite) }
+        suite.removePersistentDomain(forName: testSuiteID)
         checkBackupCore(suite)
         suite.removePersistentDomain(forName: testSuiteID)
         checkReviewCore(suite)
@@ -349,6 +708,8 @@ struct ProgressStoreChecks {
         checkBackupValidation(suite)
         suite.removePersistentDomain(forName: testSuiteID)
         checkReviewEdges(suite)
+        suite.removePersistentDomain(forName: testSuiteID)
+        checkCustomTopicDeletion(suite)
         suite.removePersistentDomain(forName: testSuiteID)
         defer {
             suite.removePersistentDomain(forName: testSuiteID)

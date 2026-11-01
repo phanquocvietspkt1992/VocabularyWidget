@@ -8,5 +8,6 @@ swiftc -module-cache-path "$OUTPUT_DIR/modules" \
   "$ROOT/Shared/VocabularyData.swift" \
   "$ROOT/Shared/VocabularySchedule.swift" \
   "$ROOT/Shared/WidgetProgressStore.swift" \
+  "$ROOT/Shared/VocabularyLearningStore.swift" \
   "$ROOT/Tests/ScheduleChecks.swift" -o "$OUTPUT_DIR/checks"
 "$OUTPUT_DIR/checks"
