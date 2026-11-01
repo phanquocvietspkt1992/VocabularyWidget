@@ -147,8 +147,8 @@ enum PronunciationAudioWarmup {
 }
 
 struct SpeakWordIntent: AudioPlaybackIntent {
-    static var title: LocalizedStringResource = "Phát âm"
-    @Parameter(title: "Từ") var word: String
+    static var title: LocalizedStringResource = "Pronounce Word"
+    @Parameter(title: "Word") var word: String
 
     init() {}
 

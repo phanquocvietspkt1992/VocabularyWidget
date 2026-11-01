@@ -74,7 +74,7 @@ xcrun devicectl device install app --device DEVICE_UDID "/absolute/path/to/Vocab
 xcrun devicectl device process launch --device DEVICE_UDID APP_BUNDLE_ID
 ```
 
-Run installation and launch as separate steps; launch only after installation succeeds. Do not uninstall the existing app or reset its App Group data. A successful app launch does not automatically add the widget to the Home Screen: open the widget gallery on the iPhone and add **Từ vựng mỗi ngày** if it is not already there.
+Run installation and launch as separate steps; launch only after installation succeeds. Do not uninstall the existing app or reset its App Group data. A successful app launch does not automatically add the widget to the Home Screen: open the widget gallery on the iPhone and add **Vocabulary Widget** if it is not already there.
 
 If the device is unavailable, report the exact `devicectl` result and ask the user to unlock/trust the iPhone, enable Developer Mode if needed, or reconnect it by USB. Do not claim the app is on the phone unless installation and launch both succeed.
 

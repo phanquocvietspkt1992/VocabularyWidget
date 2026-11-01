@@ -323,7 +323,7 @@ enum CustomVocabularyStore {
         for (offset, block) in blocks.enumerated() {
             let number = offset + 1
             guard block.count == 8 else {
-                issues.append(.init(block: number, message: "cần đúng 8 dòng (từ, loại từ, nghĩa và 5 ví dụ)"))
+                issues.append(.init(block: number, message: "must have exactly 8 lines (word, part of speech, meaning, and 5 examples)"))
                 continue
             }
             let text = block[0]
@@ -332,13 +332,13 @@ enum CustomVocabularyStore {
             let examples = Array(block[3...7])
             do {
                 try validate(text: text, partOfSpeech: partOfSpeech, meaning: meaning, examples: examples)
-            } catch AddError.invalidWord { issues.append(.init(block: number, message: "thiếu từ")); continue }
-            catch AddError.invalidPartOfSpeech { issues.append(.init(block: number, message: "loại từ không hợp lệ")); continue }
-            catch AddError.invalidMeaning { issues.append(.init(block: number, message: "thiếu nghĩa")); continue }
-            catch { issues.append(.init(block: number, message: "cần đủ 5 ví dụ")); continue }
+            } catch AddError.invalidWord { issues.append(.init(block: number, message: "word is missing")); continue }
+            catch AddError.invalidPartOfSpeech { issues.append(.init(block: number, message: "part of speech is invalid")); continue }
+            catch AddError.invalidMeaning { issues.append(.init(block: number, message: "meaning is missing")); continue }
+            catch { issues.append(.init(block: number, message: "all 5 examples are required")); continue }
             let key = normalized(text)
             guard known.insert(key).inserted else {
-                issues.append(.init(block: number, message: "từ đã tồn tại trong chủ đề hoặc danh sách này"))
+                issues.append(.init(block: number, message: "word already exists in this topic or list"))
                 continue
             }
             accepted.append(VocabularyWord(text: text, partOfSpeech: partOfSpeech, meaning: meaning, examples: examples))

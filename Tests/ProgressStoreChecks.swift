@@ -19,7 +19,13 @@ struct ProgressStoreChecks {
         }
 
         let builtInTopics = VocabularyCatalog.topics.prefix(8)
+        check(builtInTopics.map(\.id) == ["work_communication", "meetings", "software_development", "project_delivery", "it_support", "travel", "work", "daily"],
+              "built-in topic IDs should remain stable")
+        check(builtInTopics.map(\.name) == ["Work Communication", "Meetings & Collaboration", "Software Development", "IT Project Management",
+                                            "IT Support & Troubleshooting", "Travel", "Basic Work Vocabulary", "Everyday Communication"],
+              "built-in topic display names should be English")
         check(builtInTopics.reduce(0) { $0 + $1.words.count } == 400, "built-in catalog should keep 400 words")
+        check(builtInTopics[0].words[0].meaning == "đồng nghiệp", "translating topic names should preserve Vietnamese vocabulary meanings")
         for topic in builtInTopics {
             for word in topic.words {
                 let cleaned = word.examples.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -52,7 +58,7 @@ struct ProgressStoreChecks {
         do { _ = try CustomTopicStore.create(name: "  \n") } catch CustomTopicStore.CreateError.emptyName { emptyNameRejected = true } catch {}
         check(emptyNameRejected, "a custom topic should reject an empty name")
         var duplicateNameRejected = false
-        do { _ = try CustomTopicStore.create(name: "  GIAO TIẾP CÔNG VIỆC ") } catch CustomTopicStore.CreateError.duplicateName { duplicateNameRejected = true } catch {}
+        do { _ = try CustomTopicStore.create(name: "  WORK COMMUNICATION ") } catch CustomTopicStore.CreateError.duplicateName { duplicateNameRejected = true } catch {}
         check(duplicateNameRejected, "a custom topic should reject a case-insensitive duplicate built-in name")
         let createdTopic = try! CustomTopicStore.create(name: "  App Systems  ")
         let reloadedTopic = CustomTopicStore.topics.first(where: { $0.id == createdTopic.id })

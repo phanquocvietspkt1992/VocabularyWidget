@@ -24,23 +24,23 @@ struct VocabularyScheduleSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Giờ học") {
-                    DatePicker("Bắt đầu", selection: $start, displayedComponents: .hourAndMinute)
-                    DatePicker("Kết thúc", selection: $end, displayedComponents: .hourAndMinute)
-                    Stepper("Đổi từ mỗi \(interval) phút", value: $interval, in: 1...1440)
-                    Text("Bao gồm giờ bắt đầu, không bao gồm giờ kết thúc. Nếu giờ bắt đầu muộn hơn giờ kết thúc, lịch chạy qua nửa đêm.")
+                Section("Study Hours") {
+                    DatePicker("Start", selection: $start, displayedComponents: .hourAndMinute)
+                    DatePicker("End", selection: $end, displayedComponents: .hourAndMinute)
+                    Stepper("Change word every \(interval) minutes", value: $interval, in: 1...1440)
+                    Text("The start time is inclusive and the end time is exclusive. If the start is later than the end, the schedule runs overnight.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Thông báo") {
-                    Toggle("Nhắc học bằng thông báo", isOn: $enabled)
+                Section("Notifications") {
+                    Toggle("Study Reminders", isOn: $enabled)
                         .onChange(of: enabled) { _, value in
                             Task {
                                 if value {
                                     do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
-                                    catch { message = "Không xin được quyền thông báo. Hãy thử lại hoặc mở Cài đặt." }
+                                    catch { message = "Could not request notification permission. Try again or open Settings." }
                                     await refreshPermission()
                                 }
-                                // Persist the switch immediately so closing the sheet without "Lưu" keeps it.
+                                // Persist the switch immediately so closing the sheet without saving keeps it.
                                 var stored = WidgetProgressStore.schedule
                                 stored.notificationsEnabled = value
                                 WidgetProgressStore.updateSchedule(stored)
@@ -49,7 +49,7 @@ struct VocabularyScheduleSettingsView: View {
                         }
                     Text(permissionText).font(.footnote).foregroundStyle(.secondary)
                     if status == .denied {
-                        Button("Mở Cài đặt để cho phép thông báo") {
+                        Button("Open Settings to Allow Notifications") {
                             guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                             UIApplication.shared.open(url)
                         }
@@ -57,10 +57,10 @@ struct VocabularyScheduleSettingsView: View {
                 }
                 if let message { Text(message).foregroundStyle(.red) }
             }
-            .navigationTitle("Lịch học")
+            .navigationTitle("Study Schedule")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Huỷ") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Lưu") { save() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
             }
             .task { await refreshPermission() }
             .onChange(of: scenePhase) { _, phase in
@@ -71,9 +71,9 @@ struct VocabularyScheduleSettingsView: View {
 
     private var permissionText: String {
         switch status {
-        case .authorized, .provisional, .ephemeral: return "Đã cho phép. Âm báo đọc từ tiếng Anh; iOS có thể tắt âm theo cài đặt thiết bị."
-        case .denied: return "Thông báo bị từ chối. Mở Cài đặt → Thông báo để cho phép."
-        default: return "Bật thông báo để xin quyền hiển thị và phát âm báo."
+        case .authorized, .provisional, .ephemeral: return "Allowed. Notification audio pronounces English words; iOS may silence it based on device settings."
+        case .denied: return "Notifications are disabled. Open Settings → Notifications to allow them."
+        default: return "Enable reminders to request permission for notifications and audio."
         }
     }
 
@@ -89,7 +89,7 @@ struct VocabularyScheduleSettingsView: View {
                                        endMinute: (endComponents.hour ?? 0) * 60 + (endComponents.minute ?? 0),
                                        intervalMinutes: interval, notificationsEnabled: enabled)
         guard WidgetProgressStore.updateSchedule(value) else {
-            message = "Giờ bắt đầu và kết thúc phải khác nhau; khoảng đổi từ phải là số phút dương."
+            message = "Start and end times must differ, and the word interval must be a positive number of minutes."
             return
         }
         WidgetCenter.shared.reloadAllTimelines()

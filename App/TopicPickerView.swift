@@ -49,31 +49,31 @@ struct TopicPickerView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(topic.name). \(subtitle(for: topic))")
-                .accessibilityValue(model.selectedID == topic.id ? "Đang chọn" : "Chưa chọn")
-                .accessibilityHint("Chạm để học chủ đề này")
+                .accessibilityValue(model.selectedID == topic.id ? "Selected" : "Not selected")
+                .accessibilityHint("Tap to study this topic")
                 .contextMenu {
                     Button(role: .destructive) {
                         model.resetTopicID = topic.id
                         model.showingResetConfirmation = true
                     } label: {
-                        Label("Bắt đầu lại từ đầu", systemImage: "arrow.counterclockwise")
+                        Label("Restart Progress", systemImage: "arrow.counterclockwise")
                     }
                 }
             }
-            .navigationTitle("Chọn chủ đề")
+            .navigationTitle("Choose a Topic")
             .sheet(isPresented: $model.showingSchedule, onDismiss: { model.refreshID = UUID(); model.now = .now }) {
                 VocabularyScheduleSettingsView()
             }
             .toolbar {
                 ToolbarItem(placement: .bottomBar) {
-                    Button { model.showingSchedule = true } label: { Label("Lịch học và thông báo", systemImage: "clock") }
+                    Button { model.showingSchedule = true } label: { Label("Study Schedule & Notifications", systemImage: "clock") }
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { model.showingCreateTopic = true } label: { Label("Tạo chủ đề", systemImage: "plus") }
+                    Button { model.showingCreateTopic = true } label: { Label("Create Topic", systemImage: "plus") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { model.showingVocabulary = true } label: {
-                        Label("Từ của tao", systemImage: "text.badge.plus")
+                        Label("My Vocabulary", systemImage: "text.badge.plus")
                     }
                 }
             }
@@ -83,30 +83,30 @@ struct TopicPickerView: View {
             .sheet(isPresented: $model.showingCreateTopic) {
                 NavigationStack {
                     Form {
-                        Section("Tên chủ đề") {
-                            TextField("Ví dụ: Mô tả hệ thống", text: $model.topicName)
+                        Section("Topic Name") {
+                            TextField("e.g. System Design", text: $model.topicName)
                                 .textInputAutocapitalization(.words)
                         }
                         if let message = model.topicCreationError {
                             Text(message).foregroundStyle(.red)
                         }
                     }
-                    .navigationTitle("Chủ đề mới")
+                    .navigationTitle("New Topic")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Huỷ") { model.showingCreateTopic = false; model.topicName = ""; model.topicCreationError = nil }
+                            Button("Cancel") { model.showingCreateTopic = false; model.topicName = ""; model.topicCreationError = nil }
                         }
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Tạo") { createTopic() }
+                            Button("Create") { createTopic() }
                         }
                     }
                 }
                 .presentationDetents([.medium])
             }
             .id(model.refreshID)
-            .alert("Bắt đầu lại chủ đề này?", isPresented: $model.showingResetConfirmation) {
-                Button("Huỷ", role: .cancel) { model.resetTopicID = nil }
-                Button("Bắt đầu lại", role: .destructive) {
+            .alert("Restart this topic?", isPresented: $model.showingResetConfirmation) {
+                Button("Cancel", role: .cancel) { model.resetTopicID = nil }
+                Button("Restart", role: .destructive) {
                     guard let topicID = model.resetTopicID else { return }
                     WidgetProgressStore.resetProgress(for: VocabularyCatalog.topic(for: topicID))
                     model.now = .now
@@ -115,7 +115,7 @@ struct TopicPickerView: View {
                     model.resetTopicID = nil
                 }
             } message: {
-                Text("Tiến độ đã lưu của chủ đề này sẽ được đưa về từ đầu.")
+                Text("Saved progress for this topic will be reset to the beginning.")
             }
             .task {
                 while !Task.isCancelled {
@@ -125,7 +125,7 @@ struct TopicPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                Text("Widget lần lượt đổi từ sau khoảng \(WidgetProgressStore.schedule.intervalMinutes) phút trong giờ học. iOS có thể làm mới trễ hơn.")
+                Text("The widget advances to the next word about every \(WidgetProgressStore.schedule.intervalMinutes) minutes during study hours. iOS may refresh it later.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding()
                     .frame(maxWidth: .infinity)
@@ -136,16 +136,16 @@ struct TopicPickerView: View {
 
     private func subtitle(for topic: VocabularyTopic) -> String {
         let index = WidgetProgressStore.currentIndex(for: topic, at: model.now)
-        guard !topic.words.isEmpty else { return model.selectedID == topic.id ? "Đang chọn · chưa có từ · dùng ‘Từ của tao’ để thêm" : "Chưa có từ · chọn chủ đề rồi thêm từ" }
+        guard !topic.words.isEmpty else { return model.selectedID == topic.id ? "Selected · no words yet · use “My Vocabulary” to add some" : "No words yet · select this topic, then add words" }
         if model.selectedID == topic.id {
             let seconds = WidgetProgressStore.secondsUntilNextChange(for: topic, at: model.now)
             let minutes = max(1, Int(ceil(Double(seconds) / 60)))
-            return "Đang chọn · từ \(index + 1)/\(topic.words.count) · \(topic.words[index].text) · đổi sau ~\(minutes) phút"
+            return "Selected · word \(index + 1) of \(topic.words.count) · \(topic.words[index].text) · changes in ~\(minutes) min"
         }
         if WidgetProgressStore.hasVisited(topic) {
-            return "Tiếp tục từ \(index + 1)/\(topic.words.count) · \(topic.words[index].text)"
+            return "Continue at \(index + 1) of \(topic.words.count) · \(topic.words[index].text)"
         }
-        return "\(topic.words.count) từ · Chưa bắt đầu"
+        return "\(topic.words.count) words · Not started"
     }
 
     private func createTopic() {
@@ -161,11 +161,11 @@ struct TopicPickerView: View {
             WidgetCenter.shared.reloadAllTimelines()
             Task { await VocabularyNotifications.reschedule() }
         } catch CustomTopicStore.CreateError.emptyName {
-            model.topicCreationError = "Nhập tên chủ đề trước đã."
+            model.topicCreationError = "Enter a topic name."
         } catch CustomTopicStore.CreateError.duplicateName {
-            model.topicCreationError = "Tên chủ đề này đã tồn tại. Hãy chọn tên khác."
+            model.topicCreationError = "This topic name already exists. Choose another name."
         } catch {
-            model.topicCreationError = "Không lưu được chủ đề. Hãy thử lại."
+            model.topicCreationError = "Could not save the topic. Try again."
         }
     }
 }
@@ -181,9 +181,9 @@ private struct CustomVocabularyView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Từ trong chủ đề · \(topic.name)") {
+                Section("Words in Topic · \(topic.name)") {
                     if topic.words.isEmpty {
-                        ContentUnavailableView("Chủ đề chưa có từ", systemImage: "text.badge.plus", description: Text("Nhấn + để thêm từ hoặc dán danh sách từ vựng."))
+                        ContentUnavailableView("No Words in This Topic", systemImage: "text.badge.plus", description: Text("Tap + to add a word or paste a vocabulary list."))
                     }
                     ForEach(topic.words) { word in
                         VStack(alignment: .leading, spacing: 6) {
@@ -197,9 +197,9 @@ private struct CustomVocabularyView: View {
                 }
             }
             .id(refreshID)
-            .navigationTitle("Từ vựng")
+            .navigationTitle("Vocabulary")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Đóng") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Button { showingAdd = true } label: { Image(systemName: "plus") } }
             }
             .sheet(isPresented: $showingAdd, onDismiss: {
@@ -220,7 +220,7 @@ private struct AddCustomWordView: View {
     @State private var partOfSpeech = "(n)"
     @State private var meaning = ""
     @State private var examples = Array(repeating: "", count: 5)
-    @State private var mode = "Một từ"
+    @State private var mode = "Single Word"
     @State private var batchText = ""
     @State private var errorMessage: String?
     @State private var dismissAfterMessage = false
@@ -230,41 +230,41 @@ private struct AddCustomWordView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Cách thêm", selection: $mode) {
-                    Text("Một từ").tag("Một từ")
-                    Text("Danh sách").tag("Danh sách")
+                Picker("Add Method", selection: $mode) {
+                    Text("Single Word").tag("Single Word")
+                    Text("List").tag("List")
                 }.pickerStyle(.segmented)
-                if mode == "Danh sách" {
+                if mode == "List" {
                     Section {
-                        Text("Mỗi từ gồm 8 dòng: từ, loại từ, nghĩa tiếng Việt, rồi 5 câu ví dụ. Ngăn cách các từ bằng dòng trống.")
+                        Text("Each word uses 8 lines: word, part of speech, Vietnamese meaning, then 5 example sentences. Separate words with a blank line.")
                             .font(.footnote).foregroundStyle(.secondary)
                         TextEditor(text: $batchText).frame(minHeight: 240).font(.body.monospaced())
-                    } header: { Text("Dán danh sách") } footer: {
-                        Text("Ví dụ:\nalignment\n(n)\nđồng thuận\nWe need alignment on the plan.\nWe reached alignment yesterday.\nThe team is aligned.\nCan we align on this?\nI agree with that alignment.")
+                    } header: { Text("Paste a List") } footer: {
+                        Text("Example:\nalignment\n(n)\nđồng thuận\nWe need alignment on the plan.\nWe reached alignment yesterday.\nThe team is aligned.\nCan we align on this?\nI agree with that alignment.")
                     }
                 } else {
-                Section("Từ mới") {
-                    TextField("Từ tiếng Anh", text: $text)
+                Section("New Word") {
+                    TextField("English Word", text: $text)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Picker("Loại từ", selection: $partOfSpeech) {
+                    Picker("Part of Speech", selection: $partOfSpeech) {
                         ForEach(partsOfSpeech, id: \.self) { Text($0).tag($0) }
                     }
-                    TextField("Nghĩa tiếng Việt", text: $meaning)
+                    TextField("Meaning (Vietnamese)", text: $meaning)
                 }
-                Section("5 câu ví dụ") {
+                Section("5 Example Sentences") {
                     ForEach(0..<5, id: \.self) { index in
-                        TextField("Ví dụ \(index + 1)", text: $examples[index], axis: .vertical)
+                        TextField("Example \(index + 1)", text: $examples[index], axis: .vertical)
                             .lineLimit(2...4).textInputAutocapitalization(.sentences)
                     }
                 }
                 }
             }
-            .navigationTitle("Thêm từ")
+            .navigationTitle("Add Vocabulary")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Huỷ") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { Button(mode == "Danh sách" ? "Nhập" : "Lưu") { mode == "Danh sách" ? saveBatch() : save() } }
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button(mode == "List" ? "Import" : "Save") { mode == "List" ? saveBatch() : save() } }
             }
-            .alert("Chưa lưu được từ", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            .alert("Unable to Save Word", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK", role: .cancel) { errorMessage = nil; if dismissAfterMessage { dismiss() }; dismissAfterMessage = false }
             } message: { Text(errorMessage ?? "") }
         }
@@ -277,15 +277,15 @@ private struct AddCustomWordView: View {
             Task { await VocabularyNotifications.reschedule() }
             dismiss()
         } catch CustomVocabularyStore.AddError.duplicate {
-            errorMessage = "Từ này đã có trong chủ đề."
+            errorMessage = "This word is already in the topic."
         } catch CustomVocabularyStore.AddError.invalidExamples {
-            errorMessage = "Hãy nhập đủ 5 câu ví dụ."
+            errorMessage = "Enter all five example sentences."
         } catch CustomVocabularyStore.AddError.invalidWord {
-            errorMessage = "Hãy nhập từ tiếng Anh."
+            errorMessage = "Enter an English word."
         } catch CustomVocabularyStore.AddError.invalidMeaning {
-            errorMessage = "Hãy nhập nghĩa tiếng Việt."
+            errorMessage = "Enter the Vietnamese meaning."
         } catch {
-            errorMessage = "Không thể lưu từ này."
+            errorMessage = "Could not save this word."
         }
     }
 
@@ -293,14 +293,14 @@ private struct AddCustomWordView: View {
         do {
             let result = try CustomVocabularyStore.addBatch(batchText, to: topicID)
             guard !result.added.isEmpty else {
-                errorMessage = result.issues.isEmpty ? "Chưa có mục từ nào để nhập." : result.issues.map { "Mục \($0.block): \($0.message)." }.joined(separator: "\n")
+                errorMessage = result.issues.isEmpty ? "No words to import." : result.issues.map { "Item \($0.block): \($0.message)." }.joined(separator: "\n")
                 return
             }
             WidgetCenter.shared.reloadAllTimelines()
             Task { await VocabularyNotifications.reschedule() }
-            var summary = "Đã thêm \(result.added.count) từ."
+            var summary = "Added \(result.added.count) word(s)."
             if !result.issues.isEmpty {
-                summary += "\n" + result.issues.map { "Mục \($0.block): \($0.message)." }.joined(separator: "\n")
+                summary += "\n" + result.issues.map { "Item \($0.block): \($0.message)." }.joined(separator: "\n")
                 let failedBlocks = Set(result.issues.map(\.block))
                 batchText = Self.blocks(in: batchText)
                     .enumerated()
@@ -313,7 +313,7 @@ private struct AddCustomWordView: View {
             }
             errorMessage = summary
         } catch {
-            errorMessage = "Không thể lưu danh sách. Hãy thử lại."
+            errorMessage = "Could not import the list. Try again."
         }
     }
 

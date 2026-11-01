@@ -29,7 +29,7 @@ struct VocabularyTopic: Identifiable {
 
 enum VocabularyCatalog {
     private static let baseTopics: [VocabularyTopic] = [
-        VocabularyTopic(id: "work_communication", name: "Giao tiếp công việc", words: [
+        VocabularyTopic(id: "work_communication", name: "Work Communication", words: [
             .init(text: "colleague", partOfSpeech: "(n)", meaning: "đồng nghiệp", example: "My colleague can help with this."),
             .init(text: "teammate", partOfSpeech: "(n)", meaning: "đồng đội; thành viên cùng nhóm", example: "I will check with my teammate."),
             .init(text: "manager", partOfSpeech: "(n)", meaning: "quản lý", example: "The manager approved the change."),
@@ -81,7 +81,7 @@ enum VocabularyCatalog {
             .init(text: "message", partOfSpeech: "(n)", meaning: "tin nhắn", example: "I sent you a message this morning."),
             .init(text: "email", partOfSpeech: "(n)", meaning: "thư điện tử", example: "I will email you the document.")
         ]),
-        VocabularyTopic(id: "meetings", name: "Họp và phối hợp", words: [
+        VocabularyTopic(id: "meetings", name: "Meetings & Collaboration", words: [
             .init(text: "meeting", partOfSpeech: "(n)", meaning: "cuộc họp", example: "The meeting starts at ten."),
             .init(text: "agenda", partOfSpeech: "(n)", meaning: "chương trình họp", example: "I shared the agenda yesterday."),
             .init(text: "attendee", partOfSpeech: "(n)", meaning: "người tham dự", example: "Each attendee will get a link."),
@@ -133,7 +133,7 @@ enum VocabularyCatalog {
             .init(text: "participate", partOfSpeech: "(v)", meaning: "tham gia; đóng góp", example: "Everyone can participate in the discussion."),
             .init(text: "speak", partOfSpeech: "(v)", meaning: "nói; phát biểu", example: "Please speak a little more slowly.")
         ]),
-        VocabularyTopic(id: "software_development", name: "Phát triển phần mềm", words: [
+        VocabularyTopic(id: "software_development", name: "Software Development", words: [
             .init(text: "software", partOfSpeech: "(n)", meaning: "phần mềm", example: "The software needs a security update."),
             .init(text: "application", partOfSpeech: "(n)", meaning: "ứng dụng", example: "The application is ready for testing."),
             .init(text: "feature", partOfSpeech: "(n)", meaning: "tính năng", example: "This feature is not ready yet."),
@@ -185,7 +185,7 @@ enum VocabularyCatalog {
             .init(text: "documentation", partOfSpeech: "(n)", meaning: "tài liệu hướng dẫn kỹ thuật", example: "The documentation explains how to install it."),
             .init(text: "codebase", partOfSpeech: "(n)", meaning: "toàn bộ mã nguồn của dự án", example: "The codebase is easier to maintain now.")
         ]),
-        VocabularyTopic(id: "project_delivery", name: "Quản lý dự án IT", words: [
+        VocabularyTopic(id: "project_delivery", name: "IT Project Management", words: [
             .init(text: "project", partOfSpeech: "(n)", meaning: "dự án", example: "The project starts next month."),
             .init(text: "task", partOfSpeech: "(n)", meaning: "nhiệm vụ", example: "I finished my task this morning."),
             .init(text: "ticket", partOfSpeech: "(n)", meaning: "phiếu ghi nhận công việc hoặc lỗi", example: "Please add the details to the ticket."),
@@ -237,7 +237,7 @@ enum VocabularyCatalog {
             .init(text: "success", partOfSpeech: "(n)", meaning: "sự thành công", example: "Clear communication is key to success."),
             .init(text: "impact", partOfSpeech: "(n)", meaning: "tác động", example: "We need to understand the impact first.")
         ]),
-        VocabularyTopic(id: "it_support", name: "Hỗ trợ và xử lý sự cố", words: [
+        VocabularyTopic(id: "it_support", name: "IT Support & Troubleshooting", words: [
             .init(text: "issue", partOfSpeech: "(n)", meaning: "sự cố; vấn đề", example: "I am having an issue with the app."),
             .init(text: "error", partOfSpeech: "(n)", meaning: "lỗi", example: "The system showed an error."),
             .init(text: "bug", partOfSpeech: "(n)", meaning: "lỗi phần mềm", example: "This bug affects a few users."),
@@ -289,7 +289,7 @@ enum VocabularyCatalog {
             .init(text: "support", partOfSpeech: "(n)", meaning: "bộ phận hỗ trợ", example: "Contact support if the problem continues."),
             .init(text: "ticket", partOfSpeech: "(n)", meaning: "phiếu yêu cầu hỗ trợ", example: "I opened a support ticket yesterday.")
         ]),
-        VocabularyTopic(id: "travel", name: "Du lịch", words: [
+        VocabularyTopic(id: "travel", name: "Travel", words: [
             .init(text: "journey", partOfSpeech: "(n)", meaning: "chuyến đi", example: "The journey took three hours."),
             .init(text: "luggage", partOfSpeech: "(n)", meaning: "hành lý", example: "Her luggage is in the taxi."),
             .init(text: "depart", partOfSpeech: "(v)", meaning: "khởi hành", example: "Our train departs at noon."),
@@ -341,7 +341,7 @@ enum VocabularyCatalog {
             .init(text: "turn", partOfSpeech: "(v)", meaning: "rẽ", example: "Turn left at the next street."),
             .init(text: "straight", partOfSpeech: "(adv)", meaning: "thẳng", example: "Go straight for two blocks.")
         ]),
-        VocabularyTopic(id: "work", name: "Công việc cơ bản", words: [
+        VocabularyTopic(id: "work", name: "Basic Work Vocabulary", words: [
             .init(text: "deadline", partOfSpeech: "(n)", meaning: "hạn chót", example: "We finished the report before the deadline."),
             .init(text: "attend", partOfSpeech: "(v)", meaning: "tham dự", example: "I attend a team meeting every Monday."),
             .init(text: "efficient", partOfSpeech: "(adj)", meaning: "hiệu quả", example: "This is an efficient way to share updates."),
@@ -393,7 +393,7 @@ enum VocabularyCatalog {
             .init(text: "decide", partOfSpeech: "(v)", meaning: "quyết định", example: "We need to decide before the meeting."),
             .init(text: "organize", partOfSpeech: "(v)", meaning: "sắp xếp; tổ chức", example: "I organized the files by date.")
         ]),
-        VocabularyTopic(id: "daily", name: "Giao tiếp hằng ngày", words: [
+        VocabularyTopic(id: "daily", name: "Everyday Communication", words: [
             .init(text: "borrow", partOfSpeech: "(v)", meaning: "mượn", example: "Can I borrow your umbrella?"),
             .init(text: "suggest", partOfSpeech: "(v)", meaning: "đề nghị", example: "I suggest taking the earlier bus."),
             .init(text: "polite", partOfSpeech: "(adj)", meaning: "lịch sự", example: "It is polite to say thank you."),

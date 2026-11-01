@@ -61,7 +61,7 @@ private struct VocabularyWidgetView: View {
                 if entry.total > 0 {
                     Text("\(entry.position)/\(entry.total)")
                         .font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.65))
-                        .accessibilityLabel("Từ \(entry.position) trên \(entry.total)")
+                        .accessibilityLabel("Word \(entry.position) of \(entry.total)")
                 }
             }
             HStack(spacing: 6) {
@@ -75,7 +75,7 @@ private struct VocabularyWidgetView: View {
                         .font(family == .systemSmall ? .caption : .body)
                         .foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
                 }
-                .accessibilityLabel("Phát âm \(word.text)")
+                .accessibilityLabel("Pronounce \(word.text)")
             }
             Text("\(word.partOfSpeech)  \(word.meaning)")
                 .font(family == .systemSmall ? .subheadline : .headline)
@@ -86,7 +86,7 @@ private struct VocabularyWidgetView: View {
                 .font(family == .systemSmall ? .caption : .subheadline)
                 .italic().foregroundStyle(.white.opacity(0.86))
                 .lineLimit(2).minimumScaleFactor(0.75)
-                .accessibilityLabel("Ví dụ: \(word.example)")
+                .accessibilityLabel("Example: \(word.example)")
             HStack {
                 Spacer(minLength: 0)
                 if family == .systemSmall {
@@ -94,20 +94,20 @@ private struct VocabularyWidgetView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.title3).foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
                     }
-                    .accessibilityLabel("Đã học")
+                    .accessibilityLabel("Mark as learned")
                     Button(intent: NextWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
                         Image(systemName: "arrow.right.circle.fill")
                             .font(.title3).foregroundStyle(Color(red: 0.58, green: 0.84, blue: 1))
                     }
-                    .accessibilityLabel("Từ tiếp theo")
+                    .accessibilityLabel("Next word")
                 } else {
                     Button(intent: NextWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
-                        Label("Từ tiếp theo", systemImage: "arrow.right.circle.fill")
+                        Label("Next word", systemImage: "arrow.right.circle.fill")
                     }
                     .font(.caption.weight(.semibold))
                     .tint(Color(red: 0.58, green: 0.84, blue: 1))
                     Button(intent: StudiedWordIntent(topicID: entry.topicID, displayedIndex: entry.position - 1)) {
-                        Label("Đã học", systemImage: "checkmark.circle.fill")
+                        Label("Mark as learned", systemImage: "checkmark.circle.fill")
                     }
                     .font(.caption.weight(.semibold))
                     .tint(Color(red: 0.58, green: 0.84, blue: 1))
@@ -115,10 +115,10 @@ private struct VocabularyWidgetView: View {
             }
             } else {
                 Spacer(minLength: 0)
-                Text("Chủ đề chưa có từ")
+                Text("No words in this topic")
                     .font(family == .systemSmall ? .headline : .title3.bold())
                     .foregroundStyle(.white)
-                Text("Mở app để thêm từ vựng")
+                Text("Open the app to add vocabulary")
                     .font(.caption).foregroundStyle(.white.opacity(0.78))
                 Spacer(minLength: 0)
             }
@@ -132,9 +132,9 @@ private struct VocabularyWidgetView: View {
 }
 
 struct NextWordIntent: AppIntent {
-    static var title: LocalizedStringResource = "Từ tiếp theo"
-    @Parameter(title: "Chủ đề") var topicID: String
-    @Parameter(title: "Vị trí từ đang hiển thị") var displayedIndex: Int
+    static var title: LocalizedStringResource = "Next Word"
+    @Parameter(title: "Topic") var topicID: String
+    @Parameter(title: "Displayed Word Index") var displayedIndex: Int
 
     init() {}
 
@@ -152,9 +152,9 @@ struct NextWordIntent: AppIntent {
 }
 
 struct StudiedWordIntent: AppIntent {
-    static var title: LocalizedStringResource = "Đã học"
-    @Parameter(title: "Chủ đề") var topicID: String
-    @Parameter(title: "Vị trí từ đang hiển thị") var displayedIndex: Int
+    static var title: LocalizedStringResource = "Mark as Learned"
+    @Parameter(title: "Topic") var topicID: String
+    @Parameter(title: "Displayed Word Index") var displayedIndex: Int
 
     init() {}
 
@@ -179,8 +179,8 @@ struct VocabularyWidget: Widget {
         StaticConfiguration(kind: kind, provider: VocabularyTimelineProvider()) { entry in
             VocabularyWidgetView(entry: entry)
         }
-        .configurationDisplayName("Từ vựng mỗi ngày")
-        .description("Học một từ theo chủ đề bạn chọn.")
+        .configurationDisplayName("Vocabulary Widget")
+        .description("Learn one word from your selected topic.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
