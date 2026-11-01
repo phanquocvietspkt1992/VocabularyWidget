@@ -12,13 +12,15 @@ For the repeatable physical-device signing/install workflow, see [the iPhone dev
 
 For changes driven by user feedback, see [the PM → BA → Dev → DevOps → QC workflow](.agents/skills/feature-feedback-workflow/SKILL.md).
 
-The App Group identifier is `group.com.phanquocviet.VocabularyWidget` (team `PD2729ZJNT`); if you change teams, update it in both entitlement files and `WidgetProgressStore.swift` before signing for a device. Keep the app and extension identifiers under the same app bundle identifier.
+The app identifier is `com.phanquocviet.VocabularyWidget`, the extension identifier is `com.phanquocviet.VocabularyWidget.WidgetKit`, and the App Group is `group.com.phanquocviet.VocabularyWidget` (team `PD2729ZJNT`). For updates, keep these identities and both App Group entitlements unchanged and install over the existing app. Do not uninstall, delete app data, or reset the App Group defaults before deploying an update. Changing identity is not an in-place update and needs a separately designed migration; the app does not recover an inaccessible previous App Group or data removed by uninstalling.
+
+Same-identity updates retain custom topic IDs, names and order; custom words and all five examples (including additions to built-in topics); selection, per-topic progress, anchors, study history and schedule preferences. Built-in catalog content is merged with, not written over, custom storage. If custom storage or a saved schedule cannot be decoded, reads may show empty data or default settings, but additions/settings writes reject the unreadable payload rather than replacing it. Startup also preserves an unresolved saved topic selection when its custom catalog is unreadable. This prevents further loss; it does not repair corrupt data.
 
 The timeline schedules words five minutes apart in advance. WidgetKit controls actual refresh timing and may display an entry later than its scheduled time, so an exact five-minute cadence cannot be guaranteed by iOS. The app refreshes the widget when the selected topic changes and when the app returns to the foreground.
 
 ## Local progress checks
 
-Run `sh Tests/run_progress_checks.sh` to check the catalog entries, five-minute index changes, per-topic save/resume behavior, study-history recording and queries, same-day deduplication, and reset preservation on macOS.
+Run `sh Tests/run_progress_checks.sh` to check the catalog entries, five-minute index changes, per-topic save/resume behavior, study-history recording and queries, same-day deduplication, reset preservation, previous-release JSON fixture retention across suite reopen/startup and subsequent additions, and non-destructive rejection of unreadable storage on macOS. Suite reopening is not an iOS in-place deployment test; verify an actual update separately without removing the existing installation.
 
 Run `sh Tests/run_next_word_intent_checks.sh` to exercise the production `NextWordIntent.perform()` and `StudiedWordIntent.perform()` on macOS with isolated defaults, including history recording/deduplication, timer restart, wrapping, and stale-topic protection. This is not a Home Screen interaction test.
 

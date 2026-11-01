@@ -126,7 +126,7 @@ struct TopicPickerView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 4) {
-                    Text("Version 01.11.2026")
+                    Text(versionLabel)
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("The widget advances to the next word about every \(WidgetProgressStore.schedule.intervalMinutes) minutes during study hours. iOS may refresh it later.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -136,6 +136,31 @@ struct TopicPickerView: View {
                 .background(.bar)
             }
         }
+    }
+
+    private var versionLabel: String {
+        guard let version = Self.formattedVersion(
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        ) else { return "Version unavailable" }
+        return "Version \(version)"
+    }
+
+    private static func formattedVersion(_ version: String?, build: String?) -> String? {
+        guard let version, let build else { return nil }
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              parts[0].count == 4, (1...2).contains(parts[1].count), (1...2).contains(parts[2].count),
+              parts.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { (48...57).contains($0) } }),
+              !build.isEmpty, build.utf8.allSatisfy({ (48...57).contains($0) }),
+              let year = Int(parts[0]), year > 0,
+              let month = Int(parts[1]), (1...12).contains(month),
+              let day = Int(parts[2]), day > 0,
+              let deployment = Int(build), deployment > 0 else { return nil }
+        let isLeapYear = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+        let daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        guard day <= daysInMonth[month - 1] else { return nil }
+        return String(format: "%02d.%02d.%04d", day, month, year) + ".\(deployment)"
     }
 
     private func subtitle(for topic: VocabularyTopic) -> String {

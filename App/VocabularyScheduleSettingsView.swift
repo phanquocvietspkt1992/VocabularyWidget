@@ -32,21 +32,10 @@ struct VocabularyScheduleSettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Notifications") {
-                    Toggle("Study Reminders", isOn: $enabled)
-                        .onChange(of: enabled) { _, value in
-                            Task {
-                                if value {
-                                    do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
-                                    catch { message = "Could not request notification permission. Try again or open Settings." }
-                                    await refreshPermission()
-                                }
-                                // Persist the switch immediately so closing the sheet without saving keeps it.
-                                var stored = WidgetProgressStore.schedule
-                                stored.notificationsEnabled = value
-                                WidgetProgressStore.updateSchedule(stored)
-                                await VocabularyNotifications.reschedule()
-                            }
-                        }
+                    Toggle("Study Reminders", isOn: Binding(get: { enabled }, set: { value in
+                        enabled = value
+                        Task { await updateReminders(value) }
+                    }))
                     Text(permissionText).font(.footnote).foregroundStyle(.secondary)
                     if status == .denied {
                         Button("Open Settings to Allow Notifications") {
@@ -81,6 +70,22 @@ struct VocabularyScheduleSettingsView: View {
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    private func updateReminders(_ value: Bool) async {
+        if value {
+            do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
+            catch { message = "Could not request notification permission. Try again or open Settings." }
+            await refreshPermission()
+        }
+        var stored = WidgetProgressStore.schedule
+        stored.notificationsEnabled = value
+        guard WidgetProgressStore.updateSchedule(stored) else {
+            enabled = WidgetProgressStore.schedule.notificationsEnabled
+            message = "Could not save study reminders because the saved schedule could not be read. Existing saved data has not been changed."
+            return
+        }
+        await VocabularyNotifications.reschedule()
+    }
+
     private func save() {
         let calendar = Calendar.current
         let startComponents = calendar.dateComponents([.hour, .minute], from: start)
@@ -88,8 +93,12 @@ struct VocabularyScheduleSettingsView: View {
         let value = VocabularySchedule(startMinute: (startComponents.hour ?? 0) * 60 + (startComponents.minute ?? 0),
                                        endMinute: (endComponents.hour ?? 0) * 60 + (endComponents.minute ?? 0),
                                        intervalMinutes: interval, notificationsEnabled: enabled)
-        guard WidgetProgressStore.updateSchedule(value) else {
+        guard value.isValid else {
             message = "Start and end times must differ, and the word interval must be a positive number of minutes."
+            return
+        }
+        guard WidgetProgressStore.updateSchedule(value) else {
+            message = "Could not save the study schedule. The saved schedule may be unreadable; existing saved data has not been changed."
             return
         }
         WidgetCenter.shared.reloadAllTimelines()

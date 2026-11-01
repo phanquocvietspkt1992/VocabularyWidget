@@ -19,6 +19,11 @@ enum WidgetProgressStore {
     @discardableResult
     static func updateSchedule(_ value: VocabularySchedule, at date: Date = .now) -> Bool {
         guard value.isValid, let data = try? JSONEncoder().encode(value) else { return false }
+        if let stored = defaults.object(forKey: "schedule.v1") {
+            guard let storedData = stored as? Data,
+                  let decoded = try? JSONDecoder().decode(VocabularySchedule.self, from: storedData),
+                  decoded.isValid else { return false }
+        }
         let current = schedule
         guard value != current else { return true }
         var timingOnly = value
@@ -54,6 +59,8 @@ enum WidgetProgressStore {
 
     static func ensureSelectedTopicInitialized(at date: Date = .now) {
         let storedID = defaults.string(forKey: selectedKey)
+        if let storedID, !VocabularyCatalog.containsTopic(id: storedID),
+           (try? CustomTopicStore.loadTopics()) == nil { return }
         let validID = storedID.flatMap { id in
             VocabularyCatalog.containsTopic(id: id) ? id : nil
         } ?? VocabularyCatalog.topics[0].id
@@ -228,8 +235,13 @@ enum CustomTopicStore {
     }
 
     static var topics: [Topic] {
-        guard let data = defaults.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([Topic].self, from: data) else { return [] }
+        (try? loadTopics()) ?? []
+    }
+
+    static func loadTopics() throws -> [Topic] {
+        guard let stored = defaults.object(forKey: storageKey) else { return [] }
+        guard let data = stored as? Data,
+              let decoded = try? JSONDecoder().decode([Topic].self, from: data) else { throw CreateError.storageFailure }
         return decoded
     }
 
@@ -237,11 +249,11 @@ enum CustomTopicStore {
     static func create(name: String) throws -> Topic {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { throw CreateError.emptyName }
+        var updated = try loadTopics()
         let key = normalized(cleanName)
-        let existingNames = VocabularyCatalog.topics.map(\.name) + topics.map(\.name)
+        let existingNames = VocabularyCatalog.topics.map(\.name) + updated.map(\.name)
         guard !existingNames.contains(where: { normalized($0) == key }) else { throw CreateError.duplicateName }
         let topic = Topic(id: "custom_\(UUID().uuidString)", name: cleanName)
-        var updated = topics
         updated.append(topic)
         guard let data = try? JSONEncoder().encode(updated) else { throw CreateError.storageFailure }
         defaults.set(data, forKey: storageKey)
@@ -278,9 +290,7 @@ enum CustomVocabularyStore {
     }
 
     static func words(for topicID: String) -> [VocabularyWord] {
-        guard let data = defaults.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([String: [VocabularyWord]].self, from: data) else { return [] }
-        return decoded[topicID] ?? []
+        (try? loadAll())?[topicID] ?? []
     }
 
     @discardableResult
@@ -290,7 +300,7 @@ enum CustomVocabularyStore {
         let cleanExamples = examples.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         try validate(text: cleanText, partOfSpeech: partOfSpeech, meaning: cleanMeaning, examples: cleanExamples)
 
-        var all = loadAll()
+        var all = try loadAll()
         let key = normalized(cleanText)
         let existing = VocabularyCatalog.baseWordTexts(for: topicID) + (all[topicID] ?? []).map(\.text)
         guard !existing.contains(where: { normalized($0) == key }) else { throw AddError.duplicate }
@@ -316,7 +326,7 @@ enum CustomVocabularyStore {
         }
         if !current.isEmpty { blocks.append(current) }
 
-        var all = loadAll()
+        var all = try loadAll()
         var known = Set((VocabularyCatalog.baseWordTexts(for: topicID) + (all[topicID] ?? []).map(\.text)).map(normalized))
         var accepted: [VocabularyWord] = []
         var issues: [BatchIssue] = []
@@ -359,9 +369,10 @@ enum CustomVocabularyStore {
         guard examples.count == 5, examples.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw AddError.invalidExamples }
     }
 
-    private static func loadAll() -> [String: [VocabularyWord]] {
-        guard let data = defaults.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([String: [VocabularyWord]].self, from: data) else { return [:] }
+    private static func loadAll() throws -> [String: [VocabularyWord]] {
+        guard let stored = defaults.object(forKey: storageKey) else { return [:] }
+        guard let data = stored as? Data,
+              let decoded = try? JSONDecoder().decode([String: [VocabularyWord]].self, from: data) else { throw AddError.storageFailure }
         return decoded
     }
 

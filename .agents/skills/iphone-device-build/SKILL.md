@@ -27,6 +27,15 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 3. Verify the Apple Development team, signing identity, device name/UDID, app bundle identifier, and App Group before using them. Do not infer that the Unity game's signing setup automatically applies to this app.
 4. Use a fresh build directory outside the source tree. Do not remove previous builds or erase app data.
 
+### Deployment version preparation
+
+- Verify the Mac's local date with `date '+%Y.%m.%-d %Z'` before preparing an authorized deployment. Use `MARKETING_VERSION=yyyy.M.d` (three numeric components) and `CURRENT_PROJECT_VERSION=N` in all four host/extension Debug/Release target configurations. Do not use a four-part iOS marketing version.
+- The app derives its `dd.MM.yyyy.N` footer only from `Bundle.main`'s `CFBundleShortVersionString` and `CFBundleVersion`; do not add a separate date literal, runtime clock, or runtime counter.
+- Determine N from the last evidenced successful physical-iPhone installation AND launch: the next deployment on that same local day increments N by one; a new local day starts at 1. Verify the deployed metadata and success logs, not just the current source settings. If that evidence is missing or ambiguous, resolve it before choosing a counter.
+- Preparing or compiling a build does not consume N. Failed build/install/launch attempts retain the pending N for same-day retries; only a successful installation plus launch consumes it. If the local day changes before retrying, prepare the new date with N=1.
+- This source is already prepared for `2026.11.1` / `2` (`01.11.2026.2`). Do not automatically bump 2 to 3 before its first successful authorized installation plus launch. Reuse this pending version for same-day attempts; after success, record its metadata and install/launch log paths so later deployments can advance correctly.
+- Before installation, verify the built host and embedded extension plists both contain the prepared `CFBundleShortVersionString` and `CFBundleVersion`; settings or an unsigned compile alone are not deployment evidence.
+
 ### Last observed configuration (verify before reuse)
 
 - Verified on 2026-10-31: team `PD2729ZJNT` (the signing certificate subject `OU`; the `G9266R466P` in the certificate name is NOT the team ID and fails with "No Account for Team").

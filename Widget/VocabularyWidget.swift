@@ -49,6 +49,41 @@ private struct VocabularyWidgetView: View {
     let entry: VocabularyEntry
 
     var body: some View {
+        if family == .accessoryRectangular {
+            accessoryView
+        } else {
+            homeScreenView
+        }
+    }
+
+    @ViewBuilder
+    private var accessoryView: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let word = entry.word {
+                Text(word.text)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityLabel(word.text)
+                Text(word.meaning)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                    .accessibilityLabel(word.meaning)
+            } else {
+                Text("No words in this topic")
+                    .font(.headline)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .foregroundStyle(.primary)
+        .containerBackground(.clear, for: .widget)
+    }
+
+    private var homeScreenView: some View {
         VStack(alignment: .leading, spacing: family == .systemSmall ? 4 : 8) {
             if let word = entry.word {
             HStack {
@@ -181,6 +216,6 @@ struct VocabularyWidget: Widget {
         }
         .configurationDisplayName("Vocabulary Widget")
         .description("Learn one word from your selected topic.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
     }
 }

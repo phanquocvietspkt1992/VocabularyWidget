@@ -356,7 +356,135 @@ struct ProgressStoreChecks {
         check(WidgetProgressStore.advanceDisplayedWord(topicID: travel.id, displayedIndex: -1, at: nextWrapAt), "Next should retain displayed-index normalization")
         check(suite.integer(forKey: "progress.travel") == 0, "Next should normalize minus one to the final word and wrap")
 
+        checkPreviousReleaseRetention()
+
+        for unreadable in [Data("not JSON".utf8) as Any, Data("[{}]".utf8), "legacy storage"] {
+            suite.removePersistentDomain(forName: testSuiteID)
+            suite.set(unreadable, forKey: "customTopics.v1")
+            suite.set("custom_previous_release", forKey: "selectedTopic")
+            suite.set(3, forKey: "progress.custom_previous_release")
+            suite.set(nextDay, forKey: "anchor.custom_previous_release")
+            let beforeStartup = suite.dictionaryRepresentation() as NSDictionary
+            WidgetProgressStore.ensureSelectedTopicInitialized(at: nextDay)
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeStartup, "startup must not replace selection or state when the custom topic catalog is unreadable")
+            do {
+                _ = try CustomTopicStore.create(name: "Another topic")
+                check(false, "creating a topic must reject unreadable existing storage")
+            } catch CustomTopicStore.CreateError.storageFailure {
+                check(true, "unreadable topic storage should report storageFailure")
+            } catch { check(false, "unreadable topic storage should report storageFailure") }
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeStartup, "creating a topic must preserve unreadable storage and state")
+
+            suite.removeObject(forKey: "customTopics.v1")
+            suite.set(unreadable, forKey: "customVocabularyByTopic.v1")
+            let beforeAdd = suite.dictionaryRepresentation() as NSDictionary
+            do {
+                _ = try CustomVocabularyStore.add(text: "retention", partOfSpeech: "(n)", meaning: "retention", examples: customExamples, to: travel.id)
+                check(false, "adding a word must reject unreadable existing storage")
+            } catch CustomVocabularyStore.AddError.storageFailure {
+                check(true, "unreadable vocabulary storage should report storageFailure")
+            } catch { check(false, "unreadable vocabulary storage should report storageFailure") }
+            do {
+                _ = try CustomVocabularyStore.addBatch("retention\n(n)\nretention\nOne.\nTwo.\nThree.\nFour.\nFive.", to: travel.id)
+                check(false, "batch import must reject unreadable existing storage")
+            } catch CustomVocabularyStore.AddError.storageFailure {
+                check(true, "unreadable batch storage should report storageFailure")
+            } catch { check(false, "unreadable batch storage should report storageFailure") }
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeAdd, "single and batch additions must preserve unreadable storage byte-for-byte")
+
+            suite.set(unreadable, forKey: "schedule.v1")
+            let beforeScheduleEdit = suite.dictionaryRepresentation() as NSDictionary
+            var replacementSchedule = VocabularySchedule()
+            replacementSchedule.intervalMinutes = 7
+            check(!WidgetProgressStore.updateSchedule(replacementSchedule, at: nextDay), "schedule edits must reject unreadable existing schedule storage")
+            check(suite.dictionaryRepresentation() as NSDictionary == beforeScheduleEdit, "rejected schedule edits must preserve stored bytes, progress and anchors")
+        }
+
         print("Progress checks passed (\(checksPassed) checks).")
+    }
+
+    private static func checkPreviousReleaseRetention() {
+        let suiteID = "VocabularyWidget.RetentionChecks.\(UUID().uuidString)"
+        let previousDefaults = WidgetProgressStore.testDefaults
+        let seeded = UserDefaults(suiteName: suiteID)!
+        defer {
+            seeded.removePersistentDomain(forName: suiteID)
+            WidgetProgressStore.testDefaults = previousDefaults
+        }
+        let topicsData = Data("""
+        [{"id":"custom_previous_release","name":"My systems"},{"id":"custom_other","name":"My meetings"}]
+        """.utf8)
+        let wordsData = Data("""
+        {
+          "custom_previous_release":[
+            {"text":"retention","partOfSpeech":"(n)","meaning":"saved meaning","examples":["First.","Second.","Third.","Fourth.","Fifth."]},
+            {"text":"persist","partOfSpeech":"(v)","meaning":"keep data","examples":["Save one.","Save two.","Save three.","Save four.","Save five."]}
+          ],
+          "custom_other":[{"text":"review","partOfSpeech":"(v)","meaning":"user meaning","examples":["Review one.","Review two.","Review three.","Review four.","Review five."]}],
+          "work_communication":[{"text":"colleague","partOfSpeech":"(n)","meaning":"user-authored colleague meaning","examples":["Custom one.","Custom two.","Custom three.","Custom four.","Custom five."]}]
+        }
+        """.utf8)
+        let scheduleData = Data("""
+        {"startMinute":450,"endMinute":1410,"intervalMinutes":11,"notificationsEnabled":true}
+        """.utf8)
+        let historyData = Data("""
+        [{"topicID":"custom_previous_release","wordID":"retention","day":"2026-10-31","studiedAt":815184000}]
+        """.utf8)
+        let startupDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let fixture: [String: Any] = [
+            "customTopics.v1": topicsData,
+            "customVocabularyByTopic.v1": wordsData,
+            "selectedTopic": "custom_previous_release",
+            "progress.custom_previous_release": 1,
+            "anchor.custom_previous_release": startupDate.addingTimeInterval(-60),
+            "visited.custom_previous_release": true,
+            "progress.custom_other": 0,
+            "anchor.custom_other": startupDate.addingTimeInterval(-120),
+            "visited.custom_other": true,
+            "progress.work_communication": 50,
+            "anchor.work_communication": startupDate.addingTimeInterval(-180),
+            "visited.work_communication": true,
+            "schedule.v1": scheduleData,
+            "studyHistory.v1": historyData,
+            "retention.unrelatedPreference": "keep this preference"
+        ]
+        seeded.setPersistentDomain(fixture, forName: suiteID)
+        check(seeded.synchronize(), "previous-release fixture must be flushed before reopening")
+        let expectedTopics = try! JSONDecoder().decode([CustomTopicStore.Topic].self, from: topicsData)
+        let expectedWords = try! JSONDecoder().decode([String: [VocabularyWord]].self, from: wordsData)
+        let expectedHistory = try! JSONDecoder().decode([StudyHistoryRecord].self, from: historyData)
+        let expectedSchedule = try! JSONDecoder().decode(VocabularySchedule.self, from: scheduleData)
+
+        for _ in 0..<2 {
+            let reopened = UserDefaults(suiteName: suiteID)!
+            WidgetProgressStore.testDefaults = reopened
+            WidgetProgressStore.ensureSelectedTopicInitialized(at: startupDate)
+            check(reopened.persistentDomain(forName: suiteID)! as NSDictionary == fixture as NSDictionary, "reopening and startup must preserve every previous-release persisted field without clearing")
+            check(CustomTopicStore.topics == expectedTopics, "previous-release topic IDs, names and order must survive startup")
+            for (topicID, words) in expectedWords {
+                check(CustomVocabularyStore.words(for: topicID) == words, "previous-release words, all fields, five examples and order must survive for \(topicID)")
+                check(Array(VocabularyCatalog.topic(for: topicID).words.suffix(words.count)) == words, "built-in catalog merges must append rather than overwrite custom words for \(topicID)")
+            }
+            check(WidgetProgressStore.currentIndex(for: VocabularyCatalog.topic(for: "custom_previous_release"), at: startupDate) == 1, "startup must resume the selected custom topic's saved position")
+            check(WidgetProgressStore.currentIndex(for: VocabularyCatalog.topic(for: "work_communication"), at: startupDate) == 50, "startup must retain built-in topic additions and their saved position")
+            check(WidgetProgressStore.allStudyHistory() == expectedHistory && WidgetProgressStore.schedule == expectedSchedule, "previous-release history and schedule preferences must remain readable")
+        }
+
+        let addedTopic = try! CustomTopicStore.create(name: "After update")
+        let addedWord = try! CustomVocabularyStore.add(text: "coexist", partOfSpeech: "(v)", meaning: "coexist", examples: ["One.", "Two.", "Three.", "Four.", "Five."], to: "custom_previous_release")
+        let batch = try! CustomVocabularyStore.addBatch("append\n(v)\nappend\nOne.\nTwo.\nThree.\nFour.\nFive.", to: "work_communication")
+        check(WidgetProgressStore.testDefaults!.synchronize(), "subsequent additions must be flushed before reopening")
+        let reopened = UserDefaults(suiteName: suiteID)!
+        WidgetProgressStore.testDefaults = reopened
+        WidgetProgressStore.ensureSelectedTopicInitialized(at: startupDate)
+        check(CustomTopicStore.topics == expectedTopics + [addedTopic], "new topics must coexist with previous-release IDs, names and order")
+        check(CustomVocabularyStore.words(for: "custom_previous_release") == expectedWords["custom_previous_release"]! + [addedWord], "new words must append without replacing previous-release fields or order")
+        check(CustomVocabularyStore.words(for: "work_communication") == expectedWords["work_communication"]! + batch.added && batch.added.count == 1, "batch additions to built-in topics must retain previous-release user words")
+        check(CustomVocabularyStore.words(for: "custom_other") == expectedWords["custom_other"]!, "additions must not replace another custom topic's words")
+        var expectedAfterAdditions = fixture
+        expectedAfterAdditions["customTopics.v1"] = reopened.data(forKey: "customTopics.v1")
+        expectedAfterAdditions["customVocabularyByTopic.v1"] = reopened.data(forKey: "customVocabularyByTopic.v1")
+        check(reopened.persistentDomain(forName: suiteID)! as NSDictionary == expectedAfterAdditions as NSDictionary, "additions and later startup must preserve selection, all progress, anchors, history, schedule and unrelated preferences")
     }
 
     private static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
