@@ -24,6 +24,8 @@
 		A10000000000000000000024 /* VocabularyNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012; };
 		A10000000000000000000025 /* VocabularyNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012; };
 		A10000000000000000000030 /* VocabularyScheduleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020; };
+		A10000000000000000000031 /* VocabularyLearningStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021; };
+		A10000000000000000000032 /* VocabularyLearningView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,6 +68,8 @@
 		A20000000000000000000011 /* VocabularyExtraExamples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/VocabularyExtraExamples.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* VocabularyNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/VocabularyNotifications.swift; sourceTree = "<group>"; };
 		A20000000000000000000020 /* VocabularyScheduleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/VocabularyScheduleSettingsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000021 /* VocabularyLearningStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/VocabularyLearningStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000022 /* VocabularyLearningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/VocabularyLearningView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +106,7 @@
 				A20000000000000000000001 /* App/VocabularyWidgetApp.swift */,
 				A20000000000000000000002 /* App/TopicPickerView.swift */,
 				A20000000000000000000020 /* VocabularyScheduleSettingsView.swift */,
+				A20000000000000000000022 /* VocabularyLearningView.swift */,
 				A20000000000000000000006 /* App/VocabularyWidget.entitlements */,
 			);
 			name = App;
@@ -112,6 +117,7 @@
 			children = (
 				A20000000000000000000003 /* Shared/VocabularyData.swift */,
 				A20000000000000000000004 /* Shared/WidgetProgressStore.swift */,
+				A20000000000000000000021 /* VocabularyLearningStore.swift */,
 				A2000000000000000000000B /* Shared/PronunciationIntent.swift */,
 				A20000000000000000000012 /* VocabularyNotifications.swift */,
 				A20000000000000000000011 /* VocabularyExtraExamples.swift */,
@@ -220,6 +226,8 @@
 				A10000000000000000000001 /* App/VocabularyWidgetApp.swift in Sources */,
 				A10000000000000000000002 /* App/TopicPickerView.swift in Sources */,
 				A10000000000000000000030 /* VocabularyScheduleSettingsView.swift in Sources */,
+				A10000000000000000000031 /* VocabularyLearningStore.swift in Sources */,
+				A10000000000000000000032 /* VocabularyLearningView.swift in Sources */,
 				A10000000000000000000003 /* Shared/VocabularyData.swift in Sources */,
 				A10000000000000000000004 /* Shared/WidgetProgressStore.swift in Sources */,
 				A10000000000000000000009 /* Shared/PronunciationIntent.swift in Sources */,
@@ -282,7 +290,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = App/VocabularyWidget.entitlements;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Vocabulary Widget";
@@ -302,7 +310,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = App/VocabularyWidget.entitlements;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Vocabulary Widget";
@@ -323,7 +331,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widget/VocabularyWidgetExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Widget/Info.plist;
@@ -343,7 +351,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = Widget/VocabularyWidgetExtension.entitlements;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = PD2729ZJNT;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Widget/Info.plist;

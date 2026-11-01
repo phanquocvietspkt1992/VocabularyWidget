@@ -18,9 +18,23 @@ Same-identity updates retain custom topic IDs, names and order; custom words and
 
 The timeline schedules words five minutes apart in advance. WidgetKit controls actual refresh timing and may display an entry later than its scheduled time, so an exact five-minute cadence cannot be guaranteed by iOS. The app refreshes the widget when the selected topic changes and when the app returns to the foreground.
 
+## Backup and Daily Review
+
+Choose **More → Backup & Restore** to export a JSON file or import one from Files. Import validates the whole backup and current storage before offering **Replace**; Cancel changes nothing. Replacement restores all app-owned saved keys, removes owned keys absent from the backup, and leaves unrelated preferences alone. It does not request notification permission. Widgets and already-authorized reminders refresh only after a successful restore.
+
+Schema 1 contains a creation date and a base64-encoded binary property-list snapshot. The snapshot preserves raw stored JSON bytes, types, optional-key absences, custom topic/word order, additions to built-in topics, selection, progress/anchors/visited flags, study history, schedule, and review records/attempts. Bundled vocabulary and OS permissions are not included. An empty saved state can be backed up; an empty file or `{}` is not a backup. Unreadable existing stores block both export and restore rather than being silently repaired. Keep exported files private: they contain your saved vocabulary and learning history.
+
+Choose **Daily Review** for the selected topic. Each session contains up to ten distinct words: overdue words first (oldest due date, then catalog order), followed by unrated words. Reveal shows the meaning and examples and enables **Remember** / **Again**. Remember schedules the next review after 1, 3, 7, 14, then 30 local calendar days, capped at 30; Again resets the stage and schedules tomorrow. Due dates use local midnight, not fixed 24-hour intervals. **Reviewed Today** counts distinct existing word identities in the selected topic, including Again attempts, using timestamps in the current local time zone. **Due** is for the selected topic. Review results are separate from widget study history; grading does not change widget selection, progress, cadence, history, or reminders.
+
+Closing and reopening review creates a fresh queue. Topic/catalog/restore changes, newly due dates, midnight, and foreground refresh invalidate stale cards as needed. Missing topics or removed words are ignored at runtime but retained in backups; an undeclared custom-topic reference is rejected during validation.
+
+Writes are checked by readback. On a detected failure, previous data is restored and the actual error is shown; a failed review grade retains its revealed card and counters. If rollback also fails, **Export Recovery Backup** exposes the previous snapshot while that screen remains open. Shared UserDefaults does not provide crash-safe transactions or cross-process atomicity: a concurrent widget write can race with replacement, and process termination or an OS persistence failure cannot be guaranteed recoverable. Keep a backup before replacing data.
+
 ## Local progress checks
 
 Run `sh Tests/run_progress_checks.sh` to check the catalog entries, five-minute index changes, per-topic save/resume behavior, study-history recording and queries, same-day deduplication, reset preservation, previous-release JSON fixture retention across suite reopen/startup and subsequent additions, and non-destructive rejection of unreadable storage on macOS. Suite reopening is not an iOS in-place deployment test; verify an actual update separately without removing the existing installation.
+
+The same runner covers backup corruption, strict snapshot validation, exact-byte round trips, failed-writer/readback rollback, recovery export data, review ordering/counts, calendar-day scheduling, stale actions, and session refresh/completion. Its generated files live in a temporary directory outside the repository. Native Files cancellation/security-scoped access, replacement confirmation, VoiceOver answer hiding, layout, and Simulator user paths still require DevOps/QC verification; pure checks and an iOS SDK typecheck are not an Xcode build or a runtime acceptance result.
 
 Run `sh Tests/run_next_word_intent_checks.sh` to exercise the production `NextWordIntent.perform()` and `StudiedWordIntent.perform()` on macOS with isolated defaults, including history recording/deduplication, timer restart, wrapping, and stale-topic protection. This is not a Home Screen interaction test.
 

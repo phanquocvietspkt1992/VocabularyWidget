@@ -28,6 +28,8 @@ struct VocabularyTopic: Identifiable {
 }
 
 enum VocabularyCatalog {
+    static var builtInTopicIDs: Set<String> { Set(baseTopics.map(\.id)) }
+
     private static let baseTopics: [VocabularyTopic] = [
         VocabularyTopic(id: "work_communication", name: "Work Communication", words: [
             .init(text: "colleague", partOfSpeech: "(n)", meaning: "đồng nghiệp", example: "My colleague can help with this."),

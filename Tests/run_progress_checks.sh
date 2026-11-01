@@ -2,7 +2,8 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-OUTPUT_DIR="$ROOT/build/dev-study-history-progress-checks"
+OUTPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/VocabularyWidget-progress.XXXXXX")"
+trap 'rm -rf "$OUTPUT_DIR"' EXIT
 OUTPUT="$OUTPUT_DIR/checks"
 MODULE_CACHE="$OUTPUT_DIR/modules"
 mkdir -p "$MODULE_CACHE"
@@ -19,6 +20,7 @@ swiftc \
   "$ROOT/Shared/VocabularyNotifications.swift" \
   "$ROOT/Shared/VocabularyData.swift" \
   "$ROOT/Shared/WidgetProgressStore.swift" \
+  "$ROOT/Shared/VocabularyLearningStore.swift" \
   "$ROOT/Tests/ProgressStoreChecks.swift" \
   -o "$OUTPUT"
 "$OUTPUT"

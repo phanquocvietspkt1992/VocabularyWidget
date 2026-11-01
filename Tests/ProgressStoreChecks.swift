@@ -4,6 +4,336 @@ import Foundation
 struct ProgressStoreChecks {
     private static var checksPassed = 0
 
+    private static func checkBackupCore(_ suite: UserDefaults) {
+        let broken = Data("[{]".utf8)
+        suite.set(broken, forKey: "customTopics.v1")
+        check((try? VocabularyLearningStore.exportBackup()) == nil, "export must reject corrupt source rather than export fallback empty topics")
+        check(suite.data(forKey: "customTopics.v1") == broken, "failed export preserves source bytes")
+        suite.removeObject(forKey: "customTopics.v1")
+        let empty = try! VocabularyLearningStore.decodeBackup(VocabularyLearningStore.exportBackup())
+        check(try! empty.validatedSnapshot().isEmpty, "absent stores form a valid empty backup")
+        check((try? VocabularyLearningStore.decodeBackup(Data("{}".utf8))) == nil, "empty JSON object is not a backup")
+        suite.set("keep", forKey: "unrelated")
+        suite.set(999, forKey: "progress.stale")
+        suite.set(false, forKey: "visited.stale")
+        let previous = try! VocabularyLearningStore.rawSnapshot()
+        let populated = try! VocabularyLearningStore.decodeBackup(VocabularyLearningStore.exportBackup())
+        var writes = 0
+        do {
+            try VocabularyLearningStore.restore(empty, writer: { key, value in
+                writes += 1
+                if writes == 2 { throw LearningStorageError.writeFailed }
+                if let value { suite.set(value, forKey: key) } else { suite.removeObject(forKey: key) }
+            })
+            check(false, "injected writer failure must be reported")
+        } catch { check(true, "injected writer failure must be reported") }
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: previous), "failed replacement restores exact snapshot and false flags")
+        var reads = 0
+        do {
+            try VocabularyLearningStore.restore(empty, reader: {
+                reads += 1
+                if reads == 1 { throw LearningStorageError.writeFailed }
+                return suite.dictionaryRepresentation().filter { VocabularyLearningStore.owns($0.key) }
+            })
+            check(false, "injected readback failure must be reported")
+        } catch { check(true, "injected readback failure must be reported") }
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: previous), "readback failure rolls back")
+        try! VocabularyLearningStore.restore(empty)
+        check(try! VocabularyLearningStore.rawSnapshot().isEmpty, "empty restore removes destination-only owned keys")
+        check(suite.string(forKey: "unrelated") == "keep", "restore leaves unrelated preferences alone")
+        try! VocabularyLearningStore.restore(populated)
+        check(suite.integer(forKey: "progress.stale") == 999, "restore preserves nonnegative out-of-range stale indices")
+        suite.set(broken, forKey: "studyHistory.v1")
+        writes = 0
+        do { try VocabularyLearningStore.restore(empty, writer: { _, _ in writes += 1 }) } catch {}
+        check(writes == 0 && suite.data(forKey: "studyHistory.v1") == broken, "unreadable destination blocks restore before writes")
+    }
+
+    private static func checkReviewCore(_ suite: UserDefaults) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 12))!
+        suite.set("work_communication", forKey: "selectedTopic")
+        let protected = try! VocabularyLearningStore.rawSnapshot()
+        var session = VocabularyReviewSession()
+        try! session.start(at: start, calendar: calendar)
+        check(session.total == 10 && session.currentWord?.text == "colleague" && !session.revealed, "fresh review has at most ten distinct new words in catalog order")
+        let first = session.cardID
+        do { try session.grade(.remember, card: first, at: start, calendar: calendar); check(false, "hidden card cannot be graded") }
+        catch { check(session.completed == 0, "hidden card cannot be graded") }
+        try! session.reveal(card: first, at: start, calendar: calendar)
+        var writes = 0
+        do {
+            try session.grade(.remember, card: first, at: start, calendar: calendar, writer: { data in
+                writes += 1
+                if writes == 1 { throw LearningStorageError.writeFailed }
+                if let data { suite.set(data, forKey: "review.v1") } else { suite.removeObject(forKey: "review.v1") }
+            })
+            check(false, "failed grade reports failure")
+        } catch { check(session.revealed && session.completed == 0 && session.reviewedToday == 0, "failed grade keeps answer and prior counters") }
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: protected), "failed grade has no persisted side effects")
+        try! session.grade(.remember, card: first, at: start, calendar: calendar)
+        check(session.completed == 1 && session.reviewedToday == 1 && !session.revealed && session.currentWord?.text == "teammate", "accepted grade advances once and hides next answer")
+        try! session.refresh(at: start, calendar: calendar)
+        check(session.completed == 1 && session.currentWord?.text == "teammate", "refresh after successful grade preserves the session and exact saved review bytes")
+        let state = try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot())
+        let due = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8))!
+        check(state.records[0].stage == 1 && state.records[0].dueAt == due, "Remember schedules next local midnight across DST")
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot().filter { $0.key != "review.v1" }).isEqual(to: protected), "grading never changes widget progress, selection, history or schedule")
+        do { try session.grade(.remember, card: first, at: start, calendar: calendar); check(false, "old card action rejected") }
+        catch { check(session.completed == 1, "old card action rejected") }
+        var gradedAt = due.addingTimeInterval(12 * 3600)
+        for days in [3, 7, 14, 30, 30] {
+            try! session.start(at: gradedAt, calendar: calendar)
+            check(session.currentWord?.text == "colleague", "due word takes precedence over unrated words")
+            try! session.reveal(card: session.cardID, at: gradedAt, calendar: calendar)
+            try! session.grade(.remember, card: session.cardID, at: gradedAt, calendar: calendar)
+            let record = try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot()).records[0]
+            check(record.dueAt == calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: gradedAt)), "Remember interval follows staged local calendar days and cap")
+            gradedAt = record.dueAt.addingTimeInterval(12 * 3600)
+        }
+        try! session.start(at: gradedAt, calendar: calendar)
+        try! session.reveal(card: session.cardID, at: gradedAt, calendar: calendar)
+        try! session.grade(.again, card: session.cardID, at: gradedAt, calendar: calendar)
+        let again = try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot()).records[0]
+        check(again.stage == 0 && again.dueAt == calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: gradedAt)), "Again resets stage and schedules tomorrow")
+        gradedAt = again.dueAt.addingTimeInterval(12 * 3600)
+        try! session.start(at: gradedAt, calendar: calendar)
+        try! session.reveal(card: session.cardID, at: gradedAt, calendar: calendar)
+        try! session.grade(.remember, card: session.cardID, at: gradedAt, calendar: calendar)
+        check(try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot()).records[0].stage == 1, "Remember after Again restarts at one day")
+        try! session.reveal(card: session.cardID, at: gradedAt, calendar: calendar)
+        let stale = session.cardID
+        suite.set("travel", forKey: "selectedTopic")
+        do { try session.grade(.remember, card: stale, at: gradedAt, calendar: calendar); check(false, "selection change rejects stale grade") }
+        catch { check(true, "selection change rejects stale grade") }
+        try! session.refresh(at: gradedAt, calendar: calendar)
+        check(session.topicID == "travel" && session.completed == 0 && !session.revealed, "selection change abandons old queue and answer")
+        try! session.reveal(card: session.cardID, at: gradedAt, calendar: calendar)
+        try! session.refresh(at: calendar.date(byAdding: .day, value: 1, to: gradedAt)!, calendar: calendar)
+        check(!session.revealed && session.completed == 0, "midnight refresh hides answer and opens fresh queue")
+        suite.set("missing_topic", forKey: "selectedTopic")
+        try! session.start(at: start, calendar: calendar)
+        check(session.queue.isEmpty, "unknown selected topic must not fall back for review")
+        suite.set(Data("broken".utf8), forKey: "review.v1")
+        do { try session.refresh(at: start, calendar: calendar); check(false, "corrupt review must fail refresh") }
+        catch { check(session.queue.isEmpty && !session.revealed, "corrupt review must fail refresh with hidden empty session") }
+    }
+
+    private static func checkBackupValidation(_ suite: UserDefaults) {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let topic = CustomTopicStore.Topic(id: "custom_owned", name: "Work Communication")
+        let word = VocabularyWord(text: "colleague", partOfSpeech: "(n)", meaning: "user meaning", examples: ["One.", "Two.", "Three.", "Four.", "Five."])
+        let record = StudyHistoryRecord(topicID: topic.id, wordID: word.text, day: "2026-11-01", studiedAt: date)
+        let identity = ReviewIdentity(topicID: topic.id, wordID: word.text)
+        let reviewRecord = VocabularyReviewRecord(identity: identity, stage: 1, dueAt: date.addingTimeInterval(100), reviewedAt: date)
+        let attempt = VocabularyReviewAttempt(id: UUID(), identity: identity, grade: .remember, at: date)
+        let review = VocabularyReviewState(records: [reviewRecord], attempts: [attempt])
+        let valid: [String: Any] = [
+            "customTopics.v1": try! JSONEncoder().encode([topic]),
+            "customVocabularyByTopic.v1": try! JSONEncoder().encode(["work_communication": [word], topic.id: [word], "removed_builtin": [word]]),
+            "selectedTopic": topic.id,
+            "progress.\(topic.id)": 0,
+            "anchor.\(topic.id)": date,
+            "visited.\(topic.id)": false,
+            "progress.removed_builtin": 9999,
+            "schedule.v1": try! JSONEncoder().encode(VocabularySchedule()),
+            "studyHistory.v1": try! JSONEncoder().encode([record]),
+            "review.v1": try! JSONEncoder().encode(review)
+        ]
+        func unchecked(_ values: [String: Any], version: Int = 1, at: Date? = nil) -> VocabularyBackup {
+            VocabularyBackup(schemaVersion: version, createdAt: at ?? date,
+                             payload: try! PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0))
+        }
+        let backup = try! VocabularyLearningStore.decodeBackup(VocabularyLearningStore.encodeBackup(valid, at: date))
+        try! VocabularyLearningStore.restore(backup)
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: valid), "full backup retains raw Data, absent keys, false flags, zero indices, and stale references")
+        check(CustomTopicStore.topics == [topic] && CustomVocabularyStore.words(for: "work_communication") == [word], "built-in display-name collisions and user words matching bundled words remain valid")
+        var invalids: [[String: Any]] = []
+        func invalid(_ key: String, _ value: Any) {
+            var changed = valid
+            changed[key] = value
+            invalids.append(changed)
+        }
+        invalid("selectedTopic", 123)
+        invalid("selectedTopic", "custom_missing")
+        invalid("progress.\(topic.id)", -1)
+        invalid("progress.\(topic.id)", true)
+        invalid("progress.\(topic.id)", 1.5)
+        invalid("progress.\(topic.id)", "0")
+        invalid("anchor.\(topic.id)", "date")
+        invalid("anchor.\(topic.id)", Date(timeIntervalSince1970: 1e13))
+        invalid("visited.\(topic.id)", 1)
+        invalid("visited.custom_missing", true)
+        invalid("progress.", 1)
+        invalid("unrelated", "must not enter backup")
+        invalid("customTopics.v1", "not Data")
+        invalid("customTopics.v1", Data("[{]".utf8))
+        invalid("customTopics.v1", try! JSONEncoder().encode([topic, topic]))
+        invalid("customTopics.v1", try! JSONEncoder().encode([topic, CustomTopicStore.Topic(id: "custom_second", name: " WORK  COMMUNICATION ")]))
+        invalid("customTopics.v1", try! JSONEncoder().encode([CustomTopicStore.Topic(id: "work_communication", name: "invalid")]))
+        invalid("customTopics.v1", try! JSONEncoder().encode([CustomTopicStore.Topic(id: "custom_empty", name: " ")]))
+        invalid("customVocabularyByTopic.v1", try! JSONEncoder().encode([topic.id: [word, word]]))
+        invalid("customVocabularyByTopic.v1", try! JSONEncoder().encode(["custom_missing": [word]]))
+        for bad in [
+            VocabularyWord(text: " ", partOfSpeech: "(n)", meaning: "ok", examples: word.examples),
+            VocabularyWord(text: "ok", partOfSpeech: "noun", meaning: "ok", examples: word.examples),
+            VocabularyWord(text: "ok", partOfSpeech: "(n)", meaning: " ", examples: word.examples),
+            VocabularyWord(text: "ok", partOfSpeech: "(n)", meaning: "ok", examples: ["One."]),
+            VocabularyWord(text: "ok", partOfSpeech: "(n)", meaning: "ok", examples: ["", "Two.", "Three.", "Four.", "Five."])
+        ] { invalid("customVocabularyByTopic.v1", try! JSONEncoder().encode([topic.id: [bad]])) }
+        invalid("schedule.v1", Data("{}".utf8))
+        invalid("schedule.v1", try! JSONEncoder().encode(VocabularySchedule(startMinute: 0, endMinute: 0)))
+        invalid("studyHistory.v1", try! JSONEncoder().encode([record, record]))
+        invalid("studyHistory.v1", try! JSONEncoder().encode([StudyHistoryRecord(topicID: topic.id, wordID: word.text, day: "2026-02-30", studiedAt: date)]))
+        invalid("studyHistory.v1", try! JSONEncoder().encode([StudyHistoryRecord(topicID: "custom_missing", wordID: word.text, day: "2026-11-01", studiedAt: date)]))
+        invalid("review.v1", Data("{}".utf8))
+        invalid("review.v1", try! JSONEncoder().encode(VocabularyReviewState(schemaVersion: 2)))
+        invalid("review.v1", try! JSONEncoder().encode(VocabularyReviewState(records: [reviewRecord, reviewRecord])))
+        invalid("review.v1", try! JSONEncoder().encode(VocabularyReviewState(attempts: [attempt, attempt])))
+        invalid("review.v1", try! JSONEncoder().encode(VocabularyReviewState(records: [.init(identity: identity, stage: 6, dueAt: date.addingTimeInterval(100), reviewedAt: date)])))
+        invalid("review.v1", try! JSONEncoder().encode(VocabularyReviewState(records: [.init(identity: identity, stage: 0, dueAt: date, reviewedAt: date)])))
+        invalid("review.v1", Data("{\"schemaVersion\":1,\"records\":[],\"attempts\":[{\"id\":\"\(UUID().uuidString)\",\"identity\":{\"topicID\":\"work\",\"wordID\":\"word\"},\"grade\":\"bad\",\"at\":1}]}".utf8))
+        for values in invalids {
+            var writes = 0
+            do { try VocabularyLearningStore.restore(unchecked(values), writer: { _, _ in writes += 1 }); check(false, "invalid snapshot must fail") }
+            catch { check(writes == 0 && NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: valid), "invalid snapshot rejects before any writes and leaves destination intact") }
+        }
+        for bad in [unchecked(valid, version: 2), unchecked(valid, at: Date(timeIntervalSince1970: 1e13))] {
+            check((try? bad.validatedSnapshot()) == nil, "unknown envelope schema and invalid dates rejected")
+        }
+        for json in ["", "{", "{}", "{\"schemaVersion\":1}", "{\"schemaVersion\":1,\"createdAt\":0}", "{\"schemaVersion\":1,\"payload\":\"AA==\"}", "{\"schemaVersion\":\"1\",\"createdAt\":0,\"payload\":\"AA==\"}"] {
+            check((try? VocabularyLearningStore.decodeBackup(Data(json.utf8))) == nil, "malformed or incomplete envelope rejected")
+        }
+        let empty = unchecked([:])
+        do {
+            try VocabularyLearningStore.restore(empty, writer: { _, _ in throw LearningStorageError.writeFailed })
+            check(false, "unrecoverable writer failure must report recovery data")
+        } catch LearningStorageError.rollbackFailed(let data) {
+            let recovered = try! VocabularyLearningStore.decodeBackup(data).validatedSnapshot()
+            check(NSDictionary(dictionary: recovered).isEqual(to: valid), "double failure exposes a complete recovery backup")
+        } catch { check(false, "double failure must be classified as failed rollback") }
+    }
+
+    private static func checkReviewEdges(_ suite: UserDefaults) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let date = calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!
+        let topic = VocabularyCatalog.topic(for: "work_communication")
+        let other = VocabularyCatalog.topic(for: "travel")
+        suite.set(topic.id, forKey: "selectedTopic")
+        func identity(_ index: Int) -> ReviewIdentity { ReviewIdentity(topicID: topic.id, wordID: topic.words[index].text) }
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: date))!
+        let today = calendar.startOfDay(for: date)
+        let records = [
+            VocabularyReviewRecord(identity: identity(4), stage: 1, dueAt: yesterday, reviewedAt: yesterday.addingTimeInterval(-3600)),
+            VocabularyReviewRecord(identity: identity(2), stage: 1, dueAt: yesterday, reviewedAt: yesterday.addingTimeInterval(-3600)),
+            VocabularyReviewRecord(identity: identity(1), stage: 1, dueAt: today, reviewedAt: yesterday),
+            VocabularyReviewRecord(identity: identity(0), stage: 1, dueAt: date.addingTimeInterval(60), reviewedAt: yesterday),
+            VocabularyReviewRecord(identity: .init(topicID: topic.id, wordID: "removed word"), stage: 2, dueAt: yesterday, reviewedAt: yesterday.addingTimeInterval(-3600)),
+            VocabularyReviewRecord(identity: .init(topicID: "removed_topic", wordID: "removed word"), stage: 2, dueAt: yesterday, reviewedAt: yesterday.addingTimeInterval(-3600))
+        ]
+        let attempts = [
+            VocabularyReviewAttempt(id: UUID(), identity: identity(2), grade: .remember, at: date),
+            VocabularyReviewAttempt(id: UUID(), identity: identity(2), grade: .again, at: date.addingTimeInterval(1)),
+            VocabularyReviewAttempt(id: UUID(), identity: .init(topicID: other.id, wordID: other.words[0].text), grade: .remember, at: date),
+            VocabularyReviewAttempt(id: UUID(), identity: identity(4), grade: .remember, at: today.addingTimeInterval(-1)),
+            VocabularyReviewAttempt(id: UUID(), identity: .init(topicID: "removed_topic", wordID: "word"), grade: .again, at: date)
+        ]
+        suite.set(try! JSONEncoder().encode(VocabularyReviewState(records: records, attempts: attempts)), forKey: "review.v1")
+        var session = VocabularyReviewSession()
+        try! session.start(at: date, calendar: calendar)
+        check(Array(session.queue.prefix(4)).map(\.text) == [topic.words[2].text, topic.words[4].text, topic.words[1].text, topic.words[3].text], "due ordering uses oldest due date, catalog tie order, then unrated catalog order")
+        check(session.queue.count == 10 && Set(session.queue.map(\.text)).count == 10 && session.dueCount == 3, "queue caps at ten distinct identities and ignores stale due words and topics")
+        check(session.reviewedToday == 1, "Reviewed Today deduplicates exact topic-word identities only in the selected topic using timestamps in local time")
+        try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+        try! session.refresh(at: date.addingTimeInterval(61), calendar: calendar)
+        check(session.dueCount == 4 && !session.revealed && session.completed == 0, "foreground refresh includes newly due restored dates safely")
+        let before = try! VocabularyLearningStore.rawSnapshot()
+        var readbacks = 0
+        try! session.reveal(card: session.cardID, at: date.addingTimeInterval(61), calendar: calendar)
+        do {
+            try session.grade(.remember, card: session.cardID, at: date.addingTimeInterval(61), calendar: calendar, reader: {
+                readbacks += 1
+                if readbacks == 1 { throw LearningStorageError.writeFailed }
+                return suite.data(forKey: "review.v1")
+            })
+            check(false, "grade readback failure is reported")
+        } catch { check(session.revealed && session.completed == 0 && session.reviewedToday == 1, "grade readback failure keeps revealed card and prior counters") }
+        check(NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: before), "grade readback rollback retains all original bytes")
+        let backup = try! VocabularyLearningStore.decodeBackup(VocabularyLearningStore.encodeBackup(["selectedTopic": "travel"]))
+        try! VocabularyLearningStore.restore(backup)
+        try! session.refresh(at: date, calendar: calendar)
+        check(session.topicID == "travel" && !session.revealed && session.completed == 0 && session.reviewedToday == 0, "restore while a session exists resets old queue and answer")
+        for _ in 0..<10 {
+            try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+            try! session.grade(.remember, card: session.cardID, at: date, calendar: calendar)
+        }
+        check(session.queue.isEmpty && session.completed == 10 && session.total == 10 && session.reviewedToday == 10, "session naturally completes after ten accepted actions")
+        let completedState = try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot())
+        check(completedState.records.allSatisfy { $0.dueAt == calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)) }, "fall-back day grading schedules calendar midnight rather than a 24-hour offset")
+        try! session.start(at: date, calendar: calendar)
+        check(session.queue.first?.text == other.words[10].text && session.completed == 0 && !session.revealed, "reopening review builds fresh queue and excludes rated future-due cards")
+        let empty = CustomTopicStore.Topic(id: "custom_empty", name: "Empty")
+        suite.set(try! JSONEncoder().encode([empty]), forKey: "customTopics.v1")
+        suite.set(empty.id, forKey: "selectedTopic")
+        try! session.refresh(at: date, calendar: calendar)
+        check(session.total == 0 && session.queue.isEmpty && !session.revealed, "empty custom topic has a safe empty review")
+        suite.set("work_communication", forKey: "selectedTopic")
+        try! session.start(at: date, calendar: calendar)
+        try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+        let broken = Data("invalid".utf8)
+        suite.set(broken, forKey: "review.v1")
+        do { try session.grade(.again, card: session.cardID, at: date, calendar: calendar); check(false, "corruption after reveal rejects grade") }
+        catch { check(session.revealed && session.completed == 0 && suite.data(forKey: "review.v1") == broken, "corruption after reveal does not replace unreadable state or advance counters") }
+
+        suite.removeObject(forKey: "review.v1")
+        try! session.start(at: date, calendar: calendar)
+        try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+        try! session.grade(.remember, card: session.cardID, at: date, calendar: calendar)
+        check(session.reviewedToday == 1, "Work grade counts one selected-topic identity")
+        suite.set(other.id, forKey: "selectedTopic")
+        try! session.refresh(at: date, calendar: calendar)
+        check(session.reviewedToday == 0, "switching to unreviewed Travel excludes Work attempts")
+        try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+        try! session.grade(.again, card: session.cardID, at: date, calendar: calendar)
+        check(session.reviewedToday == 1, "Travel Again grade counts only Travel's identity")
+        suite.set(topic.id, forKey: "selectedTopic")
+        try! session.refresh(at: date, calendar: calendar)
+        check(session.reviewedToday == 1, "returning to Work excludes Travel attempts")
+        var mixed = try! VocabularyReviewStore.state(in: VocabularyLearningStore.rawSnapshot())
+        mixed.attempts.append(contentsOf: [
+            .init(id: UUID(), identity: identity(0), grade: .again, at: date.addingTimeInterval(1)),
+            .init(id: UUID(), identity: identity(0), grade: .remember, at: date.addingTimeInterval(2)),
+            .init(id: UUID(), identity: .init(topicID: topic.id, wordID: "removed word"), grade: .again, at: date),
+            .init(id: UUID(), identity: .init(topicID: "removed_topic", wordID: topic.words[0].text), grade: .again, at: date),
+            .init(id: UUID(), identity: identity(1), grade: .again, at: today.addingTimeInterval(-1))
+        ])
+        suite.set(try! JSONEncoder().encode(mixed), forKey: "review.v1")
+        try! session.refresh(at: date, calendar: calendar)
+        check(session.reviewedToday == 1, "mixed-topic attempts deduplicate Remember and Again and ignore deleted words, topics and prior days")
+        try! session.reveal(card: session.cardID, at: date, calendar: calendar)
+        let staleCard = session.cardID
+        let staleSnapshot = try! VocabularyLearningStore.rawSnapshot()
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: today)!
+        var staleWrites = 0
+        var callbacks = 0
+        do {
+            try session.grade(.again, card: staleCard, at: nextDay, calendar: calendar, writer: { _ in
+                staleWrites += 1
+                DispatchQueue.main.async { callbacks += 1 }
+            })
+            check(false, "day rollover rejects stale grade")
+        } catch LearningStorageError.staleSession { check(true, "day rollover rejects stale grade") }
+        catch { check(false, "day rollover reports the stale-session error") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        check(staleWrites == 0 && callbacks == 0 && session.reviewedToday == 1
+              && NSDictionary(dictionary: try! VocabularyLearningStore.rawSnapshot()).isEqual(to: staleSnapshot),
+              "stale grade leaves counters and persistence unchanged with no callback after draining queued work")
+        try! session.refresh(at: nextDay, calendar: calendar)
+        check(session.reviewedToday == 0 && !session.revealed && session.cardID != staleCard, "local day rollover resets selected-topic count and hides the stale card")
+    }
+
     static func main() {
         let testSuiteID = "VocabularyWidget.ProgressStoreChecks.\(UUID().uuidString)"
         let suite = HistoryTrackingDefaults(suiteName: testSuiteID)!
@@ -11,6 +341,14 @@ struct ProgressStoreChecks {
         let protectedKey = "VocabularyWidget.ProgressStoreChecks.protected.\(UUID().uuidString)"
         realAppGroupDefaults.set("keep", forKey: protectedKey)
         WidgetProgressStore.testDefaults = suite
+        suite.removePersistentDomain(forName: testSuiteID)
+        checkBackupCore(suite)
+        suite.removePersistentDomain(forName: testSuiteID)
+        checkReviewCore(suite)
+        suite.removePersistentDomain(forName: testSuiteID)
+        checkBackupValidation(suite)
+        suite.removePersistentDomain(forName: testSuiteID)
+        checkReviewEdges(suite)
         suite.removePersistentDomain(forName: testSuiteID)
         defer {
             suite.removePersistentDomain(forName: testSuiteID)
@@ -458,6 +796,10 @@ struct ProgressStoreChecks {
         for _ in 0..<2 {
             let reopened = UserDefaults(suiteName: suiteID)!
             WidgetProgressStore.testDefaults = reopened
+            let backup = try! VocabularyLearningStore.decodeBackup(VocabularyLearningStore.exportBackup(at: startupDate))
+            let expectedOwned = fixture.filter { VocabularyLearningStore.owns($0.key) }
+            check(NSDictionary(dictionary: try! backup.validatedSnapshot()).isEqual(to: expectedOwned), "previous-release backup retains every owned key and exact JSON bytes including bundled-word collisions")
+            try! VocabularyLearningStore.restore(backup)
             WidgetProgressStore.ensureSelectedTopicInitialized(at: startupDate)
             check(reopened.persistentDomain(forName: suiteID)! as NSDictionary == fixture as NSDictionary, "reopening and startup must preserve every previous-release persisted field without clearing")
             check(CustomTopicStore.topics == expectedTopics, "previous-release topic IDs, names and order must survive startup")
