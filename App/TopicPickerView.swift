@@ -3,6 +3,8 @@ import WidgetKit
 
 private final class TopicSelectionModel: ObservableObject {
     @Published var showingSchedule = false
+    @Published var showingBackup = false
+    @Published var showingReview = false
     @Published var selectedID = WidgetProgressStore.selectedTopicID
     @Published var now = Date.now
     @Published var showingResetConfirmation = false
@@ -64,16 +66,30 @@ struct TopicPickerView: View {
             .sheet(isPresented: $model.showingSchedule, onDismiss: { model.refreshID = UUID(); model.now = .now }) {
                 VocabularyScheduleSettingsView()
             }
+            .sheet(isPresented: $model.showingBackup) {
+                VocabularyBackupView {
+                    model.selectedID = WidgetProgressStore.selectedTopicID
+                    model.now = .now
+                    model.refreshID = UUID()
+                }
+            }
+            .sheet(isPresented: $model.showingReview) { VocabularyDailyReviewView() }
             .toolbar {
                 ToolbarItem(placement: .bottomBar) {
                     Button { model.showingSchedule = true } label: { Label("Study Schedule & Notifications", systemImage: "clock") }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button { model.showingReview = true } label: { Label("Daily Review", systemImage: "rectangle.on.rectangle") }
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { model.showingCreateTopic = true } label: { Label("Create Topic", systemImage: "plus") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { model.showingVocabulary = true } label: {
-                        Label("My Vocabulary", systemImage: "text.badge.plus")
+                    Menu {
+                        Button { model.showingVocabulary = true } label: { Label("My Vocabulary", systemImage: "text.badge.plus") }
+                        Button { model.showingBackup = true } label: { Label("Backup & Restore", systemImage: "externaldrive") }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
                     }
                 }
             }
