@@ -1,74 +1,83 @@
 ---
 name: feature-feedback-workflow
-description: "Turn user feedback or a reported app bug into a scoped product change using four distinct PM, BA, Dev, and QC agents with explicit handoffs. Use for feature requests, UX changes, or bugs in VocabularyWidget."
+description: "Coordinate PM, BA, Dev, DevOps, and QC for feature requests or reported behavior issues in VocabularyWidget using concise handoffs and focused evidence."
 ---
 
-# PM → BA → Dev → DevOps → QC workflow
+# Vocabulary Feedback Workflow
 
-Use five role agents: **PM, BA, Dev, DevOps, QC**. The root Codex agent coordinates handoffs and reports to the user; it is not a role. Run the roles in order because each stage depends on the previous one. Do not have agents edit the same app files concurrently.
+Coordinate the role agents in [`.github/agents/`](../../../.github/agents/). Their individual files own role instructions and tool permissions; this skill owns routing, handoffs, and completion gates. Read only the role files needed for the current task.
 
-## 1. PM — understand the user problem
+## Route by task
 
-Give the PM agent the user's feedback and enough project context to reason about the actual product. Ask it to return:
+- **Question or brainstorming only:** answer directly; do not start the implementation workflow.
+- **Bug report or feature feedback:** run PM → BA → Dev → DevOps → QC in order, as required by repository policy. For explicit requests, PM and BA should make concise confirmations without reopening settled decisions; keep every gate, not repeated prose.
+- **PM:** separate facts from assumptions; state minimum outcome, non-goals, and only material questions.
+- **BA:** translate the PM handoff into at most seven testable Given/When/Then criteria and label automated versus runtime checks.
+- **Dev:** load [`vocabulary-dev`](../../../.github/skills/vocabulary-dev/SKILL.md), implement the approved scope, and run the cheapest behavior check immediately after the first edit.
+- **DevOps:** for iOS changes, build generic iOS first, then prepare Simulator. If user acceptance includes physical installation, use the separate `iphone-device-build` skill only when requested.
+- **QC:** independently challenge each criterion using focused checks and the actual user path. Mark inaccessible UI/device criteria `BLOCKED` or `UNVERIFIED`; never infer them from compilation or app launch.
 
-- The user's stated need and observed problem, separated from assumptions.
-- Who is affected, impact, and likely frequency, based only on evidence available.
-- The smallest useful outcome and out-of-scope changes.
-- Open questions that materially affect behavior. Ask the user only when a decision cannot be inferred; continue independent work meanwhile.
+## Autonomy and learning
 
-The PM does not edit code or redefine an explicit user preference.
+- When the user explicitly requests implementation or approves a defined outcome, the coordinator owns the sequential workflow through QC. Proceed with routine, scoped edits and focused checks without asking for repeated permission; ask only when a material product decision is unresolved or a required acceptance check is blocked.
+- Work iteratively and evidence-first: state a falsifiable hypothesis and cheapest check, make a small reversible change, and use the focused result to guide the next step. If it fails, repair that slice and rerun the same check; do not repeat a failed approach without new evidence.
+- Preserve existing user changes and data. Stop for explicit authorization before expanding scope, destructive or irreversible actions, touching real user data, physical-device installation/deployment, signing, committing, pushing, or changing branches. Do not request or expose secrets.
+- After QC, evaluate the complete run from the role reports and evidence. Separate product defects, workflow gaps, and environment/tool blockers; summarize rework, duplicated effort, and handoff loss when observed. Add only the smallest reusable workflow correction after a repeatable gap is demonstrated, report that change, and leave broader workflow redesign to the user.
+- This autonomy applies while handling an authorized request; it does not mean background work continues after the session or task ends.
 
-## 2. BA — make it testable
+## Handoff packet
 
-Pass the PM handoff to the BA agent. Ask it to inspect relevant product behavior and write concise acceptance criteria in Given/When/Then form, including:
+Pass forward a compact packet, not the conversation transcript:
 
-- The normal path and meaningful edge cases.
-- Persisted state and interactions with topic selection, saved progress, and the five-minute cadence when relevant.
-- Which checks can be automated and which require an actual iPhone/widget interaction.
-
-The BA does not edit app code. If the user's desired behavior is already clear, do not delay implementation for unnecessary approval.
-
-## 3. Dev — implement the approved behavior
-
-Pass the PM problem statement and BA criteria to the Dev agent. Have it inspect the current implementation, identify a plausible root cause before changing code, make the smallest focused fix, and report:
-
-- Root cause evidence, files changed, and implementation summary.
-- Tests/builds run and their exact results.
-- Any acceptance criterion it could not verify.
-
-The Dev owns source changes. It may add/update focused tests when they cover a real regression risk. Do not change signing, bundle IDs, App Groups, or unrelated product behavior for a UI bug.
-
-## 4. DevOps — build and prepare the iOS Simulator
-
-Pass the Dev handoff and BA criteria to the DevOps agent. Its scope is build and runtime preparation, not product-code fixes or acceptance decisions:
-
-- Check Xcode scheme and available iOS Simulator devices; select an available iPhone simulator.
-- Build the `VocabularyWidgetApp` scheme for that simulator using a fresh DerivedData directory outside the source tree and `CODE_SIGNING_ALLOWED=NO`.
-- Require a successful build, then install and launch the app on the selected simulator. Record the simulator name/UDID, build command, and artifact/log paths.
-- Confirm the widget extension is embedded in the built host app. Do not claim the widget is on the Home Screen unless it was actually added.
-- If CoreSimulatorService is unavailable, report **BLOCKED** with the exact command/error. Do not switch to a physical-device signing flow or alter bundle IDs/App Groups as a workaround.
-
-For the native widget, booting and launching the host app alone does not verify the Home Screen button. If adding the widget requires UI interaction unavailable to the agent, hand the ready simulator state to QC and state that limitation.
-
-## 5. QC — independently challenge the result
-
-Pass the acceptance criteria, Dev handoff, and DevOps simulator/build report to a fresh QC agent. QC reviews the diff and runs relevant existing checks independently. It must test the user's reported path, not merely check that the project compiles or launches.
-
-For widget interactions, verify the actual AppIntent/button path, visible word change, per-topic saved index, and timer restart. Cover small and medium widget variants when they expose the action. Simulator/source-level checks are not evidence of physical-iPhone behavior; report each verification surface separately. If the phone or simulator is unavailable, mark that criterion **unverified**, not passed.
-
-QC returns **PASS**, **FAIL** with a reproduction, or **BLOCKED** with the exact missing environment. QC is read-only; a product-behavior failure returns to Dev for a fix, a build/deployment failure returns to DevOps, and QC reruns the failed criteria after the responsible role reports a fix.
-
-## Exit gate and user review
-
-The coordinator may call the change ready only when all acceptance criteria pass, or when remaining unverified criteria are clearly identified and the user explicitly accepts that limitation. Summarize the user problem, what changed, test/build evidence, simulator/device coverage, and any remaining check. Then let the user evaluate the result before starting a new iteration.
-
-## Handoff format
-
-Each role returns only its role's findings in this format:
+For every run, preserve each role's concise audit record: input/handoff received, work performed and evidence checked, bugs/risks/blockers found (or explicitly not assessed), and the key handoff sent onward. The coordinator must pass the actual decision, evidence, unresolved issue, and any changed acceptance criterion to the next role. Do not imply direct agent-to-agent conversation beyond these coordinator-mediated packets.
 
 ```text
-Role:
-Findings:
-Decision / handoff:
-Open risks:
+User outcome / non-goals:
+Acceptance criteria:
+Relevant paths and verified facts:
+Existing changes or constraints:
+Cheapest focused check:
+Unresolved risks:
 ```
+
+Include only applicable fields. Keep packets to the information the next role needs; cite paths/symbols and exact observed errors instead of copying source or prior reports. Each role returns only its required result, evidence, and blocker (PM ≤120 words, BA ≤180, Dev ≤180, DevOps ≤150, QC ≤180). Role agents must use the packet and inspect only the nearest owning code/test; do not reload this full workflow, the conversation handoff, or prior transcripts unless a required fact is missing. Do not have roles re-read unrelated files or rerun already-passing suites without a reason.
+
+## Execution and gates
+
+1. **Orient:** check `git status`, read `AGENTS.md` and `CONVERSATION_HANDOFF.md`, then inspect the nearest owning code and one relevant test. Preserve user changes.
+2. **PM → BA:** identify the user-visible outcome, persisted state, failure cases, and how each criterion can be observed. Ask the user only for decisions that cannot be inferred safely; explicit decisions are inherited, not asked again.
+3. **Dev:** state one falsifiable local hypothesis and cheapest check before editing. Make the smallest change. Immediately run that check after the first edit; fix and rerun the same slice before broadening.
+4. **DevOps:** first build `VocabularyWidgetApp` for `generic/platform=iOS` with fresh DerivedData outside the repository and `CODE_SIGNING_ALLOWED=NO`. Save the complete log and require exit 0 plus `BUILD SUCCEEDED`. Then build/install/launch an available iPhone Simulator in place without erasing or uninstalling. Report compile and Simulator availability separately.
+5. **QC:** inspect the current diff independently, execute only relevant checks, and test the user path rather than relying on compilation. Report `PASS`, `FAIL`, or `BLOCKED` per surface. Source tests, Simulator interaction, and physical-device behavior are separate evidence levels.
+6. **Close:** report changed paths, exact focused checks, build/runtime outcomes, unresolved acceptance criteria, and whether user data or Git state changed. Include the per-run report below. Do not commit, push, change branches, or physically deploy without explicit authorization.
+
+For persistence mutations, assert exact rollback/readback behavior and actual caller feedback; drain queued asynchronous work before asserting no side effects. For topic-scoped counters, include mixed-topic fixtures. For device-only audio/App Intent/background bugs, preserve a device-side log before changes and group it by PID and launch path. Use isolated defaults in tests; never use the live App Group as a test fixture.
+
+## Evidence discipline
+
+- Keep full build logs outside the source tree. Classify the first actionable build failure as source, configuration, or environment; other tests do not turn a failed build into a pass.
+- Use short command output during exploration; retain full logs as files and cite the relevant lines/errors in handoffs.
+- Never call a deep-link dispatch, prompt, compile, or app launch an interaction pass unless the expected UI/result was actually observed.
+- If a required interface is unavailable, state the exact blocker and leave that criterion `UNVERIFIED`; do not simulate evidence.
+- Run a brief retrospective after QC. Add a reusable instruction only when a repeatable gap is demonstrated; do not encode one-off environment failures.
+
+## Per-run report
+
+After every feature/bug workflow, include a concise report in the final response; do not create a repository report file unless the user asks. Cover all five roles (PM, BA, Dev, DevOps, QC), including the input each received, actual work/evidence, issues found, and the key outgoing handoff. For the communication trail, summarize only coordinator-mediated handoffs and substantive decision/criteria changes; never invent exchanges or expose private chain-of-thought.
+
+Close with the workflow result: defects found or introduced (distinguish product defects from process gaps and environment/tool blockers), acceptance status, where rework/duplication or handoff loss occurred, and one evidence-backed improvement for the next run. Say "none observed in checked scope" or "not assessed" as appropriate; do not convert missing evidence into a clean bill of health or score an agent from a single run. Keep suggested process changes separate from confirmed changes, and update standing instructions only for a demonstrated repeatable gap.
+
+## Role agents
+
+- [Vocabulary PM](../../../.github/agents/pm.agent.md)
+- [Vocabulary BA](../../../.github/agents/ba.agent.md)
+- [Vocabulary Dev](../../../.github/agents/dev.agent.md)
+- [Vocabulary DevOps](../../../.github/agents/devops.agent.md)
+- [Vocabulary QC](../../../.github/agents/qc.agent.md)
+
+## References
+
+- [VS Code custom agents](https://code.visualstudio.com/docs/agent-customization/custom-agents): role-specific instructions/tools and handoffs.
+- [VS Code Agent Skills](https://code.visualstudio.com/docs/agent-customization/agent-skills): skills are loaded on demand, with reference/resources loaded as needed.
+- [Anthropic: Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): start with simple workflows and add agent complexity only when it improves results; use separate stages when subtasks are well-defined.
+- [OpenAI: Prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering): clear role/task boundaries, structured context, and concise, relevant inputs.
