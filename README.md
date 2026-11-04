@@ -20,6 +20,20 @@ Same-identity updates retain custom topic IDs, names and order; custom words and
 
 The timeline schedules words five minutes apart in advance. WidgetKit controls actual refresh timing and may display an entry later than its scheduled time, so an exact five-minute cadence cannot be guaranteed by iOS. The app refreshes the widget when the selected topic changes and when the app returns to the foreground.
 
+## Sentence Game
+
+Open the **Sentence Game** tab to create and play sentence topics. It is separate from **Vocabulary**: sentence pairs, rounds and narrator controls do not use vocabulary topics or progress. The widget remains vocabulary-only. Enter each pair as an English sentence on one line and its Vietnamese meaning on the next; blank lines may separate pairs. Existing tab-separated rows remain supported. Exact repeated pairs are skipped; conflicting English/Vietnamese mappings report their source lines without silently choosing one. Four unique pairs unlock play.
+
+**Stage** asks every pair once in shuffled order and uses selection plus confirmation. **Quick** asks up to five questions and scores immediately. Both automatically read the currently displayed English choices A–D in their shuffled order; the Vietnamese prompt stays visible as text and is not spoken. The **Audio** menu offers installed English voices, narrator, music and sound-effect controls. The game keeps its original synthesized sounds and visuals; it does not use show recordings, music, or branding. The primary Confirm/Next action stays pinned at the bottom while the question content can scroll when needed.
+
+Sentence topics use the host's `sentenceTopics.v1` defaults key, separate from the vocabulary App Group and excluded from vocabulary backup. Invalid/corrupt storage refuses replacement. Detected write failures restore previous bytes and saved topics; recovery failures lock editing and expose recovery data. UserDefaults readback is not a crash-safe disk transaction. Word links wait until the game sheet/tab routing permits them.
+
+Run `sh Tests/run_sentence_game_checks.sh` for isolated persistence, import validation, question/scoring/retry rules, English-only speech plans, installed-voice validation, stale-generation cancellation and music/narration gating. Build or launch evidence alone does not verify audible output, in-game layout, or navigation interactions.
+
+## Vocabulary Topic Details
+
+Tap a topic in the **Vocabulary** tab to open its word list. Each word has a pronunciation button; expand **Examples** to hear any example. Opening a word shows **Word Detail**, where every example can also be played individually. Vocabulary playback is independent of the Sentence Game narrator. The widget continues to use vocabulary data only.
+
 ## Word Detail
 
 Tap only the word text on the small or medium widget to open **Word Detail**; tapping the rectangular Lock Screen widget opens its displayed word. Existing widget speaker, Next and Mark buttons remain App Intents. Empty widgets link to the topic list.

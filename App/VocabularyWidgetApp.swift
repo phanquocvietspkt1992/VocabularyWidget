@@ -26,7 +26,12 @@ struct VocabularyWidgetApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TopicPickerView(model: topicModel, detailRouter: detailRouter)
+            TabView {
+                TopicPickerView(model: topicModel, detailRouter: detailRouter)
+                    .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
+                SentenceStudioView()
+                    .tabItem { Label("Sentence Game", systemImage: "gamecontroller") }
+            }
                 .sheet(item: Binding(get: { detailRouter.state.detail }, set: { value in
                     if value == nil { detailRouter.close() }
                 })) { session in

@@ -1,0 +1,323 @@
+import Foundation
+
+@main
+struct SentenceGameChecks {
+    static var count = 0
+    static func check(_ value: Bool, _ message: String) {
+        precondition(value, message)
+        count += 1
+    }
+    static func rejects(_ message: String, expected: SentenceGameError? = nil, _ action: () throws -> Void) {
+        do { try action(); fatalError(message) } catch {
+            if let expected { check(error as? SentenceGameError == expected, "\(message): exact caller error") }
+            count += 1
+        }
+    }
+    static func rejectsImport(_ message: String, expected: SentenceImportError, text: String) {
+        do {
+            _ = try SentenceTopic.parsePairs(text)
+            check(false, message)
+        } catch let error as SentenceImportError {
+            check(error == expected, "\(message): exact import diagnostic")
+        } catch {
+            check(false, "\(message): unexpected error type")
+        }
+    }
+    static func topic(_ name: String, count: Int = 8) -> SentenceTopic {
+        SentenceTopic(name: name, pairs: (0..<count).map {
+            SentencePair(english: "\(name) English \($0)", vietnamese: "\(name) Vietnamese \($0)")
+        })
+    }
+    @MainActor
+    static func main() throws {
+        let suiteName = "SentenceGameChecks.\(UUID())"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let separateName = "SentenceGameChecks.\(UUID())"
+        let separate = UserDefaults(suiteName: separateName)!
+        defer { separate.removePersistentDomain(forName: separateName) }
+        suite.set("untouched", forKey: "selectedTopic")
+        let store = SentenceRepository(defaults: suite)
+        let first = topic("First")
+        let other = topic("Other")
+        check(try store.load().isEmpty, "empty isolated suite")
+        var trimmed = first
+        trimmed.name = "  First \n"
+        let saved = try store.save([trimmed, other], expected: [])
+        check(saved[0].name == "First", "trimmed name")
+        check(try SentenceRepository(defaults: suite).load() == saved, "reopen saved pairs")
+        check(try SentenceRepository(defaults: separate).load().isEmpty, "separate suite cannot see saved topics")
+        var spaced = first
+        spaced.pairs[0].english = " \n English sentence \n "
+        spaced.pairs[0].vietnamese = " Translation \n "
+        let cleaned = try spaced.validated()
+        check(cleaned.pairs[0].english == "English sentence" && cleaned.pairs[0].vietnamese == "Translation", "trim both sentences")
+        check(SentenceTopic.normalized("Stra\u{00DF}e") == SentenceTopic.normalized("STRASSE"), "Unicode case folding")
+        check(suite.string(forKey: "selectedTopic") == "untouched", "word key untouched")
+        var duplicate = first
+        duplicate.pairs[1].english = " FIRST  English\n0 "
+        rejects("English duplicates") { _ = try duplicate.validated() }
+        duplicate = first
+        duplicate.pairs[1].vietnamese = "first  VIETNAMESE 0"
+        rejects("Vietnamese duplicates") { _ = try duplicate.validated() }
+        duplicate.name = " \n "
+        rejects("empty name") { _ = try duplicate.validated() }
+        let baseline = suite.data(forKey: SentenceRepository.key)!
+        rejects("stale save", expected: .stale) { try store.save([], expected: []) }
+        check(suite.data(forKey: SentenceRepository.key) == baseline, "stale keeps bytes")
+        var writes = 0
+        let rejected = SentenceRepository(defaults: suite, writer: { bytes in
+            writes += 1
+            if writes == 1 { throw SentenceGameError.writeFailed }
+            suite.set(bytes, forKey: SentenceRepository.key)
+        })
+        rejects("rejected write", expected: .writeFailed) { try rejected.save([], expected: saved) }
+        check(try rejected.load() == saved && suite.data(forKey: SentenceRepository.key) == baseline, "rejection rollback")
+        writes = 0
+        let mismatch = SentenceRepository(defaults: suite, writer: { bytes in
+            writes += 1
+            suite.set(writes == 1 ? Data("bad".utf8) : bytes, forKey: SentenceRepository.key)
+        })
+        rejects("readback mismatch", expected: .writeFailed) { try mismatch.save([], expected: saved) }
+        check(try mismatch.load() == saved && suite.data(forKey: SentenceRepository.key) == baseline, "readback rollback")
+        writes = 0
+        let modelStore = SentenceRepository(defaults: suite, writer: { bytes in
+            writes += 1
+            if writes == 1 { suite.set(Data("bad".utf8), forKey: SentenceRepository.key) }
+            else { suite.set(bytes, forKey: SentenceRepository.key) }
+        })
+        let model = SentenceLibraryModel(repository: modelStore)
+        rejects("caller observes rejected edit") { try model.upsert(topic("New"), expected: saved) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        check(model.topics == saved && model.canEdit && writes == 2, "caller restores actual saved list, no queued side effects")
+        let lockedStore = SentenceRepository(defaults: suite, writer: { _ in throw SentenceGameError.writeFailed })
+        let lockedModel = SentenceLibraryModel(repository: lockedStore)
+        rejects("rollback failure reported", expected: .recoveryFailed) { try lockedModel.delete(first.id, expected: saved) }
+        check(!lockedModel.canEdit && lockedModel.error != nil && lockedModel.recoveryBytes == baseline, "rollback failure locks editing with recovery bytes")
+        rejects("locked writes refused") { try lockedStore.save([], expected: saved) }
+        check(suite.data(forKey: SentenceRepository.key) == baseline, "failed writer keeps baseline")
+        suite.set(Data("corrupt".utf8), forKey: SentenceRepository.key)
+        rejects("corrupt read") { _ = try store.load() }
+        rejects("corrupt save", expected: .unreadable) { try store.save([], expected: []) }
+        check(suite.data(forKey: SentenceRepository.key) == Data("corrupt".utf8), "corrupt bytes preserved")
+        let corruptModel = SentenceLibraryModel(repository: store)
+        check(!corruptModel.canEdit && corruptModel.error != nil, "corrupt UI refuses editing")
+        suite.set("wrong type", forKey: SentenceRepository.key)
+        rejects("wrong-type save") { try store.save([], expected: []) }
+        check(suite.string(forKey: SentenceRepository.key) == "wrong type", "wrong-type bytes untouched")
+        suite.set(baseline, forKey: SentenceRepository.key)
+        var invalidPair = first
+        invalidPair.pairs[0].english = " \n "
+        rejects("empty sentence") { _ = try invalidPair.validated() }
+        let emptyPairs = SentenceTopic(name: "No pairs", pairs: [])
+        rejects("empty pairs") { _ = try emptyPairs.validated() }
+        rejects("duplicate topic name") { try store.save([first, SentenceTopic(name: " FIRST ", pairs: other.pairs)], expected: saved) }
+        check(try SentenceTopic.parsePairs("English\tVietnamese\n\nOther\tTranslation").count == 2, "tab-separated parser")
+          let linePairs = try SentenceTopic.parsePairs("First English\nNghĩa thứ nhất\n\nSecond English\nNghĩa thứ hai")
+          check(linePairs.map(\.english) == ["First English", "Second English"]
+              && linePairs.map(\.vietnamese) == ["Nghĩa thứ nhất", "Nghĩa thứ hai"], "paired-line parser preserves order across blanks")
+          check(try SentenceTopic.parsePairs("English\nMeaning\n\n english \n MEANING ").count == 1,
+              "identical normalized pairs are deduplicated")
+          rejectsImport("odd pair reports original line", expected: .incompletePair(5),
+                    text: "English\n\nVietnamese\n\nOrphan")
+          rejectsImport("duplicate Vietnamese reports both lines", expected: .vietnameseConflict(firstLine: 2, secondLine: 5),
+                    text: "First English\nShared meaning\n\nSecond English\nShared meaning")
+        rejectsImport("duplicate English reports both lines", expected: .englishConflict(firstLine: 1, secondLine: 5),
+                    text: "Shared English\nFirst meaning\n\n\nShared English\nSecond meaning")
+          rejectsImport("malformed TSV reports original line", expected: .malformedLine(3),
+                    text: "English\tVietnamese\n\nBad\trow\textra")
+        rejects("malformed paste") { _ = try SentenceTopic.parsePairs("English|Vietnamese") }
+        rejects("extra columns") { _ = try SentenceTopic.parsePairs("a\tb\tc") }
+        for mode in SentenceMode.allCases {
+            var round = try SentenceRound(topic: first, mode: mode)
+            check(round.questions.count == (mode == .stage ? 8 : 5), "mode count")
+            check(Set(round.questions.map(\.id)).count == round.questions.count, "no repeated question")
+            for question in round.questions {
+                check(question.options.count == 4 && Set(question.options.map(\.id)).count == 4, "four distinct options")
+                check(question.options.filter { $0.id == question.id }.count == 1, "one correct option")
+                check(question.options.allSatisfy { first.pairs.contains($0) && !other.pairs.contains($0) }, "same originating topic")
+                let wrong = question.options.first { $0.id != question.id }!
+                round.select(wrong.id)
+                check(round.revealed == (mode == .quick), "mode reveal policy")
+                round.confirm()
+                let scored = round.answers.count
+                round.select(question.id)
+                round.confirm()
+                check(round.answers.count == scored && round.score == 0, "score once; selection locked")
+                round.advance()
+            }
+            check(round.finished && round.incorrectIDs.count == round.questions.count, "wrong does not end round")
+            for retryCount in 1...3 {
+                let ids = Set(first.pairs.prefix(retryCount).map(\.id))
+                let retry = try SentenceRound(topic: first, mode: mode, retryIDs: ids)
+                check(Set(retry.questions.map(\.id)) == ids, "wrong-only retry")
+                check(retry.questions.allSatisfy { $0.options.count == 4 && $0.options.allSatisfy(first.pairs.contains) }, "retry uses full source")
+            }
+        }
+        rejects("too few") { _ = try SentenceRound(topic: topic("Small", count: 3), mode: .stage) }
+        var success = try SentenceRound(topic: first, mode: .stage)
+        success.advance()
+        check(success.index == 0, "cannot skip unanswered")
+        success.select(UUID())
+        success.confirm()
+        check(success.answers.isEmpty, "foreign answer refused")
+        while let question = success.current {
+            success.select(question.id)
+            check(!success.revealed, "Stage waits for confirmation")
+            success.confirm()
+            success.advance()
+        }
+        check(success.score == 8 && success.incorrectIDs.isEmpty, "all correct results")
+        var generator = SeededGenerator(seed: 42)
+        let ordered = try SentenceRound(topic: first, mode: .stage, using: &generator)
+        check(ordered.questions.map(\.id) != first.pairs.map(\.id), "question order shuffled")
+        check(Set(ordered.questions.compactMap { question in question.options.firstIndex { $0.id == question.id } }).count > 1, "correct option placement varies")
+        let sourceSnapshot = first
+        for question in ordered.questions {
+            let plan = SentenceSpeechLine.plan(for: question)
+            check(plan.count == 4, "narration contains only four English answer choices")
+            check(plan.map(\.text) == zip(["A", "B", "C", "D"], question.options).map { "\($0.0). \($0.1.english)" }, "display shuffle and labels exact, no prompt or correctness hints")
+        }
+        check(first == sourceSnapshot, "speech plan does not mutate source")
+        var narration = SentenceNarrationState()
+        check(narration.shouldAutoRead, "new questions auto-read in every mode")
+        narration.enabled = false
+        check(!narration.shouldAutoRead, "disabled narrator prevents auto")
+        narration.enabled = true
+        let stale = narration.begin()
+        narration.cancel()
+        let fresh = narration.begin()
+        var staleCallbacksDrained = false
+        DispatchQueue.main.async {
+            check(!narration.started(stale) && !narration.finished(stale), "queued old start/finish ignored")
+            staleCallbacksDrained = true
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        check(staleCallbacksDrained, "queued stale work actually drained")
+        check(narration.pending && !narration.speaking, "queuing is not speech start")
+        check(narration.started(fresh) && narration.speaking, "fresh start accepted")
+        check(narration.finished(fresh) && !narration.pending, "fresh finish accepted")
+        check(!narration.finished(fresh) && !narration.started(fresh), "duplicate completion and late start ignored")
+        for reason in ["select", "confirm", "advance", "retry", "exit", "background", "interruption", "route", "voice change", "stop"] {
+            let old = narration.begin()
+            check(narration.started(old), "\(reason): initial speech starts")
+            narration.cancel()
+            let replacement = narration.begin()
+            var drained = false
+            DispatchQueue.main.async {
+                check(!narration.finished(old) && !narration.started(old), "\(reason): stale callbacks rejected after replay")
+                drained = true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            check(drained && narration.pending && !narration.speaking && narration.generation == replacement, "\(reason): old work cannot change fresh read")
+            narration.cancel()
+            check(!narration.pending && !narration.speaking, "\(reason): immediate invalidation")
+        }
+        let voices = [SentenceEnglishVoice(id: "en", name: "English"),
+                  SentenceEnglishVoice(id: "en-uk", name: "English UK")]
+        check(SentenceEnglishVoice.selected("en", installed: voices) == voices[0], "installed English voice selected")
+        check(SentenceEnglishVoice.selected("missing", installed: voices) == nil, "removed English voice rejected")
+        check(SentenceEnglishVoice.supportsEnglish("en-US") && SentenceEnglishVoice.supportsEnglish("EN_gb"), "English locale variants accepted")
+        check(!SentenceEnglishVoice.supportsEnglish("vi-VN") && !SentenceEnglishVoice.supportsEnglish("fr-FR"), "non-English voice excluded")
+        for size in 4...5 {
+            check(try SentenceRound(topic: topic("Size", count: size), mode: .quick).questions.count == size, "Quick uses available pairs up to five")
+        }
+        var policy = SentenceAudioPolicy()
+        check(!policy.permitsMusic && !policy.permitsEffects, "inactive audio blocked")
+        policy.active = true
+        policy.stage = true
+        check(policy.permitsMusic && policy.permitsEffects, "active Stage audio")
+        policy.narrating = true
+        check(policy.musicVolume == 0.045 && policy.permitsNarration, "speech attenuates permitted music")
+        policy.narrating = false
+        check(policy.musicVolume == 0.22, "speech end restores active music")
+        policy.musicEnabled = false
+        check(!policy.permitsMusic && policy.permitsEffects, "independent music mute")
+        check(policy.musicVolume == 0 && policy.permitsNarration, "music mute cannot be restored by speech end and allows narration")
+        policy.musicEnabled = true
+        policy.effectsEnabled = false
+        check(policy.permitsMusic && !policy.permitsEffects, "independent effect mute")
+        check(policy.permitsNarration, "effects mute leaves narration permitted")
+        policy.interrupted = true
+        check(!policy.permitsMusic && !policy.permitsEffects, "interruption blocks both")
+        policy.narrating = false
+        check(policy.musicVolume == 0 && !policy.permitsNarration, "interrupted speech end cannot restore music")
+        policy.interrupted = false
+        policy.stage = false
+        policy.effectsEnabled = true
+        check(!policy.permitsMusic && policy.permitsEffects, "Quick has effects but no music")
+        policy.active = false
+        check(!policy.permitsMusic && !policy.permitsEffects, "dismissal blocks effects after activation")
+        policy.stage = true
+        check(policy.musicVolume == 0 && !policy.permitsNarration, "background/exit speech end cannot resurrect music")
+        let reveal = SentenceRevealController()
+        var callbacks = 0
+        reveal.begin(delay: 1_000_000) { callbacks += 1 }
+        reveal.cancel()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        check(callbacks == 0 && !reveal.isRevealing, "dismiss/background cancels queued reveal")
+        reveal.begin(delay: 1_000_000) { callbacks += 1 }
+        reveal.begin(delay: 1_000_000) { callbacks += 100 }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        check(callbacks == 1 && !reveal.isRevealing, "single delayed reveal, repeated confirm ignored")
+        reveal.begin(delay: 1_000_000) { callbacks += 100 }
+        reveal.cancel()
+        reveal.begin(delay: 1_000_000) { callbacks += 1 }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        check(callbacks == 2, "fresh question cannot receive stale reveal")
+        for sound in SentenceSound.allCases {
+            let bytes = sound.wave()
+            check(String(data: bytes.prefix(4), encoding: .ascii) == "RIFF" && String(data: bytes.subdata(in: 8..<12), encoding: .ascii) == "WAVE", "original PCM WAV header")
+            func unsigned(_ offset: Int, size: Int) -> Int {
+                (0..<size).reduce(0) { $0 | (Int(bytes[offset + $1]) << ($1 * 8)) }
+            }
+            let samples = stride(from: 44, to: bytes.count, by: 2).map {
+                Double(Int16(bitPattern: UInt16(unsigned($0, size: 2)))) / Double(Int16.max)
+            }
+            let expectedSamples = Int(22_050 * sound.noteDuration) * sound.notes.count
+            check(unsigned(4, size: 4) == bytes.count - 8 && unsigned(40, size: 4) == samples.count * 2 && samples.count == expectedSamples, "RIFF and PCM data lengths match duration")
+            check(String(data: bytes.subdata(in: 12..<16), encoding: .ascii) == "fmt " && unsigned(16, size: 4) == 16 && unsigned(20, size: 2) == 1 && unsigned(22, size: 2) == 1, "mono PCM format")
+            check(unsigned(24, size: 4) == 22_050 && unsigned(28, size: 4) == 44_100 && unsigned(32, size: 2) == 2 && unsigned(34, size: 2) == 16 && String(data: bytes.subdata(in: 36..<40), encoding: .ascii) == "data", "sample rate, byte rate, alignment and depth")
+            check(samples.allSatisfy { $0.isFinite && abs($0) < 0.5 }, "finite PCM with constant nonclipping headroom")
+            let energy = samples.reduce(0) { $0 + $1 * $1 } / Double(samples.count)
+            check(energy > 0.0001 && samples.contains { $0 > 0.01 } && samples.contains { $0 < -0.01 }, "meaningful bipolar waveform energy")
+            check(samples.first == 0 && samples.last == samples.first, "music loop joins at matching zero crossings")
+            if sound == .music {
+                func component(_ frequency: Double, note: Int, offset: Int = 0) -> Double {
+                    let start = note * Int(22_050 * sound.noteDuration) + offset
+                    let frameCount = 2_048
+                    var real = 0.0
+                    var imaginary = 0.0
+                    for index in 0..<frameCount {
+                        let phase = 2 * Double.pi * frequency * Double(index) / 22_050
+                        let value = samples[start + index]
+                        real += value * cos(phase)
+                        imaginary += value * sin(phase)
+                    }
+                    return 2 * hypot(real, imaginary) / Double(frameCount)
+                }
+                let noteMidpoint = Int(22_050 * sound.noteDuration) / 2
+                check(component(349.23, note: 2, offset: noteMidpoint) > 0.04
+                    && component(523.25, note: 12, offset: noteMidpoint) > 0.04,
+                    "melody moves through the midrange")
+                check(component(174.61, note: 1) > 0.02 && component(164.81, note: 5) > 0.02,
+                    "chord bed changes harmony")
+                check(component(73.42, note: 2) > 0.015,
+                    "low pulse is present beneath the melody")
+                check(abs(samples[1] - samples[0]) < 0.02
+                    && abs(samples.last! - samples[samples.count - 2]) < 0.02,
+                    "music loop edge slopes stay click-safe")
+            }
+            check(bytes == sound.wave(), "deterministic original synthesis")
+        }
+        print("Passed \(count) sentence game checks")
+    }
+
+    struct SeededGenerator: RandomNumberGenerator {
+        var seed: UInt64
+        mutating func next() -> UInt64 {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return seed
+        }
+    }
+}

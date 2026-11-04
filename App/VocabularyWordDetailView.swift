@@ -1,6 +1,63 @@
 import SwiftUI
 import WidgetKit
 import AppIntents
+import AVFoundation
+
+@MainActor
+final class VocabularyExamplePlayback: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    @Published private(set) var activeText: String?
+    @Published private(set) var errorMessage: String?
+    private let synthesizer = AVSpeechSynthesizer()
+    private var activeUtterance: AVSpeechUtterance?
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func speak(_ text: String, isActive: Bool) {
+        stop()
+        guard isActive else { return }
+#if os(iOS)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            errorMessage = "Audio unavailable: \(error.localizedDescription)"
+            return
+        }
+#endif
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        activeText = text
+        activeUtterance = utterance
+        errorMessage = nil
+        synthesizer.speak(utterance)
+    }
+
+    func stop() {
+        activeUtterance = nil
+        activeText = nil
+        synthesizer.stopSpeaking(at: .immediate)
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, self.synthesizer === synthesizer, self.activeUtterance === utterance else { return }
+            self.activeUtterance = nil
+            self.activeText = nil
+        }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, self.synthesizer === synthesizer, self.activeUtterance === utterance else { return }
+            self.activeUtterance = nil
+            self.activeText = nil
+        }
+    }
+}
 
 @MainActor
 final class VocabularyDetailRouter: ObservableObject {
@@ -76,6 +133,7 @@ struct VocabularyWordDetailView: View {
     @ObservedObject var router: VocabularyDetailRouter
     @State private var session: VocabularyDetailSession
     @StateObject private var playback = VocabularyDetailPlayback()
+    @StateObject private var examplePlayback = VocabularyExamplePlayback()
     @State private var actionError: String?
 
     init(session: VocabularyDetailSession, router: VocabularyDetailRouter) {
@@ -106,15 +164,29 @@ struct VocabularyWordDetailView: View {
                         Divider()
                         Text("Examples").font(.headline).accessibilityAddTraits(.isHeader)
                         ForEach(Array(snapshot.word.examples.enumerated()), id: \.offset) { offset, example in
-                            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                Text("\(offset + 1).")
-                                    .font(.body.monospacedDigit()).foregroundStyle(.secondary)
-                                Text(example).frame(maxWidth: .infinity, alignment: .leading)
-                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            Button {
+                                playback.cancel()
+                                session.cancelPlayback()
+                                examplePlayback.speak(example, isActive: scenePhase == .active)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                    Text("\(offset + 1).")
+                                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                                    Text(example).frame(maxWidth: .infinity, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Image(systemName: "speaker.wave.2")
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Play example \(offset + 1): \(example)")
+                            .accessibilityValue(examplePlayback.activeText == example ? "Speaking" : "")
+                            .disabled(scenePhase != .active)
                         }
                         Divider()
                         Button {
+                            examplePlayback.stop()
                             guard scenePhase == .active,
                                   let topics = try? VocabularyCatalog.detailTopics(),
                                   session.identity.resolve(in: topics) != nil else {
@@ -155,6 +227,9 @@ struct VocabularyWordDetailView: View {
                     if let error = actionError ?? playback.errorMessage {
                         Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                     }
+                    if let error = examplePlayback.errorMessage {
+                        Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding()
                 .frame(maxWidth: 640, alignment: .leading)
@@ -175,11 +250,12 @@ struct VocabularyWordDetailView: View {
         }
         .onDisappear {
             playback.cancel()
+            examplePlayback.stop()
             router.unregisterPlayback(owner: session.id)
         }
         .onChange(of: scenePhase) { _, phase in
             playback.isActive = phase == .active
-            if phase != .active { playback.cancel(); session.cancelPlayback() }
+            if phase != .active { playback.cancel(); examplePlayback.stop(); session.cancelPlayback() }
         }
     }
 

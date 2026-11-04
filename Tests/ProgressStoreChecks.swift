@@ -71,6 +71,11 @@ struct ProgressStoreChecks {
           }
 
           let deleteRouter = VocabularyDetailRouter()
+          let sentenceRouter = VocabularyDetailRouter()
+          sentenceRouter.open(identity.url, blocked: model.blocksWordDetail)
+          sentenceRouter.drain(blocked: model.blocksWordDetail)
+          check(sentenceRouter.state.detail != nil && sentenceRouter.state.pending == nil,
+              "independent sentence tab does not block vocabulary detail routing")
           deleteRouter.open(identity.url, blocked: false)
           let detailBeforeDeletePrompt = deleteRouter.state.detail!.id
           model.deleteTopicID = "custom_delete-pending"
@@ -692,9 +697,10 @@ struct ProgressStoreChecks {
     static func main() {
         let testSuiteID = "VocabularyWidget.ProgressStoreChecks.\(UUID().uuidString)"
         let suite = HistoryTrackingDefaults(suiteName: testSuiteID)!
-        let realAppGroupDefaults = UserDefaults(suiteName: WidgetProgressStore.appGroupID)!
+        let controlSuiteID = "VocabularyWidget.ProgressStoreChecks.Control.\(UUID().uuidString)"
+        let controlDefaults = UserDefaults(suiteName: controlSuiteID)!
         let protectedKey = "VocabularyWidget.ProgressStoreChecks.protected.\(UUID().uuidString)"
-        realAppGroupDefaults.set("keep", forKey: protectedKey)
+        controlDefaults.set("keep", forKey: protectedKey)
         WidgetProgressStore.testDefaults = suite
         suite.removePersistentDomain(forName: testSuiteID)
         checkWordDetail(suite)
@@ -714,7 +720,7 @@ struct ProgressStoreChecks {
         defer {
             suite.removePersistentDomain(forName: testSuiteID)
             WidgetProgressStore.testDefaults = nil
-            realAppGroupDefaults.removeObject(forKey: protectedKey)
+            controlDefaults.removePersistentDomain(forName: controlSuiteID)
         }
 
         let builtInTopics = VocabularyCatalog.topics.prefix(8)
@@ -905,7 +911,7 @@ struct ProgressStoreChecks {
         check(WidgetProgressStore.selectedTopicID == workCommunication.id, "an unknown saved topic should recover to the first available topic")
         let emptyTopic = VocabularyTopic(id: "empty", name: "Empty", words: [])
         check(WidgetProgressStore.currentIndex(for: emptyTopic, at: resumedAt) == 0, "an empty topic should not produce a negative or invalid index")
-        check(realAppGroupDefaults.string(forKey: protectedKey) == "keep", "progress checks should not mutate the real App Group suite")
+        check(controlDefaults.string(forKey: protectedKey) == "keep", "progress checks should not mutate another defaults suite")
 
         WidgetProgressStore.selectedTopicID = travel.id
         suite.set(Int.max, forKey: "progress.travel")

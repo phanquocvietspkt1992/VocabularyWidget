@@ -54,13 +54,8 @@ struct TopicPickerView: View {
     var body: some View {
         NavigationStack {
             List(VocabularyCatalog.topics) { topic in
-                Button {
-                    guard WidgetProgressStore.selectedTopicID != topic.id else { return }
-                    WidgetProgressStore.selectTopic(topic)
-                    model.selectedID = topic.id
-                    model.now = .now
-                    WidgetCenter.shared.reloadAllTimelines()
-                    Task { await VocabularyNotifications.reschedule() }
+                NavigationLink {
+                    VocabularyTopicDetailView(topicID: topic.id, model: model, detailRouter: detailRouter, onSelect: selectTopic)
                 } label: {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 5) {
@@ -79,7 +74,7 @@ struct TopicPickerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(topic.name). \(subtitle(for: topic))")
                 .accessibilityValue(model.selectedID == topic.id ? "Selected" : "Not selected")
-                .accessibilityHint("Tap to study this topic")
+                .accessibilityHint("View words and examples")
                 .contextMenu {
                     Button(role: .destructive) {
                         model.resetTopicID = topic.id
@@ -284,6 +279,15 @@ struct TopicPickerView: View {
         return "\(topic.words.count) words · Not started"
     }
 
+    private func selectTopic(_ topic: VocabularyTopic) {
+        guard WidgetProgressStore.selectedTopicID != topic.id else { return }
+        WidgetProgressStore.selectTopic(topic)
+        model.selectedID = topic.id
+        model.now = .now
+        WidgetCenter.shared.reloadAllTimelines()
+        Task { await VocabularyNotifications.reschedule() }
+    }
+
     private func createTopic() {
         do {
             let topic = try CustomTopicStore.create(name: model.topicName)
@@ -317,6 +321,98 @@ struct TopicPickerView: View {
         } catch {
             model.deleteTopicError = error.localizedDescription
         }
+    }
+}
+
+private struct VocabularyTopicDetailView: View {
+    let topicID: String
+    @ObservedObject var model: TopicSelectionModel
+    @ObservedObject var detailRouter: VocabularyDetailRouter
+    let onSelect: (VocabularyTopic) -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var speech = VocabularyExamplePlayback()
+
+    private var topic: VocabularyTopic { VocabularyCatalog.topic(for: topicID) }
+
+    var body: some View {
+        List {
+            Section {
+                if model.selectedID == topic.id {
+                    Label("Selected for Study", systemImage: "checkmark.circle.fill")
+                    if !topic.words.isEmpty {
+                        let index = WidgetProgressStore.currentIndex(for: topic, at: model.now)
+                        Text("Continue at word \(index + 1) of \(topic.words.count)")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button { onSelect(topic) } label: {
+                        Label("Study This Topic", systemImage: "play.circle")
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                }
+            }
+            if let error = speech.errorMessage {
+                Section { Text(error).font(.footnote).foregroundStyle(.red) }
+            }
+            Section("Words and Examples") {
+                if topic.words.isEmpty {
+                    ContentUnavailableView("No Words in This Topic", systemImage: "text.book.closed")
+                }
+                ForEach(Array(topic.words.enumerated()), id: \.element.id) { index, word in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Button {
+                                speech.stop()
+                                let identity = VocabularyWordIdentity(topicID: topic.id, index: index, text: word.text)
+                                detailRouter.open(identity.url, blocked: false)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(word.text).font(.headline)
+                                        Text(word.partOfSpeech).font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                    Text(word.meaning).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Open word details and all examples")
+                            Button { speech.speak(word.text, isActive: scenePhase == .active) } label: {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .frame(minWidth: 44, minHeight: 44)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Pronounce \(word.text)")
+                            .disabled(scenePhase != .active)
+                        }
+                        if !word.examples.isEmpty {
+                            DisclosureGroup("Examples (\(word.examples.count))") {
+                                ForEach(Array(word.examples.enumerated()), id: \.offset) { exampleIndex, example in
+                                    Button { speech.speak(example, isActive: scenePhase == .active) } label: {
+                                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                            Text(example).frame(maxWidth: .infinity, alignment: .leading)
+                                            Image(systemName: "speaker.wave.2")
+                                        }
+                                        .font(.subheadline)
+                                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Play example \(exampleIndex + 1): \(example)")
+                                    .disabled(scenePhase != .active)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle(topic.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { speech.stop() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { speech.stop() } }
     }
 }
 
