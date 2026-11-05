@@ -95,7 +95,8 @@ struct SentenceTopic: Codable, Equatable, Identifiable {
 }
 
 enum SentenceGameError: LocalizedError, Equatable {
-    case invalidTopic, duplicatePair, duplicateTopic, invalidPaste, unreadable, writeFailed, recoveryFailed, stale, tooSmall
+    case invalidTopic, duplicatePair, duplicateTopic, invalidPaste, unreadable, writeFailed, recoveryFailed
+    case historyUnreadable, historyWriteFailed, historyRecoveryFailed, stale, tooSmall
 
     var errorDescription: String? {
         switch self {
@@ -106,6 +107,9 @@ enum SentenceGameError: LocalizedError, Equatable {
         case .unreadable: return "Sentence data cannot be read. It has not been replaced."
         case .writeFailed: return "The change could not be saved. Previous sentence data was restored."
         case .recoveryFailed: return "Saving and recovery failed. Editing is locked. Export recovery data when available."
+        case .historyUnreadable: return "Answer history cannot be read. It has not been replaced."
+        case .historyWriteFailed: return "The answer was scored, but its history could not be saved. Previous history was restored."
+        case .historyRecoveryFailed: return "The answer was scored, but saving and restoring history failed. History editing is locked."
         case .stale: return "Saved topics changed. Reopen the editor before saving again."
         case .tooSmall: return "At least four distinct sentence pairs are needed to play."
         }
@@ -200,9 +204,138 @@ final class SentenceRepository {
     }
 }
 
-enum SentenceMode: String, CaseIterable, Identifiable {
+enum SentenceMode: String, Codable, CaseIterable, Identifiable {
     case stage = "Stage", quick = "Quick"
     var id: String { rawValue }
+}
+
+struct SentenceHistoryOption: Codable, Equatable {
+    let letter: String
+    let id: UUID
+    let english: String
+}
+
+struct SentenceRoundHistoryRecord: Codable, Equatable, Identifiable {
+    let id: UUID
+    let roundID: UUID
+    let topicID: UUID
+    let topicName: String
+    let mode: SentenceMode
+    let answeredAt: Date
+    let questionVietnamese: String
+    let correctEnglish: String
+    let options: [SentenceHistoryOption]
+    let selectedLetter: String
+    let selectedID: UUID
+    let selectedEnglish: String
+    let isCorrect: Bool
+    let questionIndex: Int
+
+    init(roundID: UUID, topic: SentenceTopic, mode: SentenceMode, answeredAt: Date,
+         question: SentenceQuestion, selectedID: UUID, questionIndex: Int) {
+        let selected = question.options.first { $0.id == selectedID }!
+        id = UUID()
+        self.roundID = roundID
+        topicID = topic.id
+        topicName = topic.name
+        self.mode = mode
+        self.answeredAt = answeredAt
+        questionVietnamese = question.pair.vietnamese
+        correctEnglish = question.pair.english
+        options = zip(["A", "B", "C", "D"], question.options).map {
+            SentenceHistoryOption(letter: $0.0, id: $0.1.id, english: $0.1.english)
+        }
+        selectedLetter = ["A", "B", "C", "D"][question.options.firstIndex { $0.id == selectedID }!]
+        self.selectedID = selectedID
+        selectedEnglish = selected.english
+        isCorrect = selectedID == question.pair.id
+        self.questionIndex = questionIndex
+    }
+}
+
+final class SentenceRoundHistoryRepository {
+    static let key = "sentenceRoundHistory.v1"
+    private struct Archive: Codable { let version: Int; let records: [SentenceRoundHistoryRecord] }
+    private let defaults: UserDefaults
+    private let writer: (Any?) throws -> Void
+    private let reader: () -> Any?
+    private(set) var recoveryBytes: Data?
+    private(set) var isLocked = false
+
+    init(defaults: UserDefaults = .standard, writer: ((Any?) throws -> Void)? = nil, reader: (() -> Any?)? = nil) {
+        self.defaults = defaults
+        self.writer = writer ?? { value in
+            if let value { defaults.set(value, forKey: Self.key) }
+            else { defaults.removeObject(forKey: Self.key) }
+        }
+        self.reader = reader ?? { defaults.object(forKey: Self.key) }
+    }
+
+    private func raw() -> Any? { reader() }
+
+    func load() throws -> [SentenceRoundHistoryRecord] {
+        guard let value = raw() else { return [] }
+        guard let bytes = value as? Data else { throw SentenceGameError.historyUnreadable }
+        do {
+            let archive = try JSONDecoder().decode(Archive.self, from: bytes)
+            guard archive.version == 1 else { throw SentenceGameError.historyUnreadable }
+            return archive.records
+        } catch { throw SentenceGameError.historyUnreadable }
+    }
+
+    @discardableResult
+    func append(_ record: SentenceRoundHistoryRecord) throws -> [SentenceRoundHistoryRecord] {
+        guard !isLocked else { throw SentenceGameError.historyRecoveryFailed }
+        let previous = try load()
+        let oldBytes = raw() as? Data
+        let replacement = previous + [record]
+        let bytes = try JSONEncoder().encode(Archive(version: 1, records: replacement))
+        do {
+            try writer(bytes)
+            guard raw() as? Data == bytes, try load() == replacement else { throw SentenceGameError.historyWriteFailed }
+        } catch {
+            do {
+                try writer(oldBytes)
+                guard raw() as? Data == oldBytes, try load() == previous else { throw SentenceGameError.historyWriteFailed }
+            } catch {
+                recoveryBytes = oldBytes
+                isLocked = true
+                throw SentenceGameError.historyRecoveryFailed
+            }
+            throw SentenceGameError.historyWriteFailed
+        }
+        return try load()
+    }
+}
+
+@MainActor
+final class SentenceRoundHistoryModel: ObservableObject {
+    @Published private(set) var records: [SentenceRoundHistoryRecord] = []
+    @Published private(set) var error: String?
+    private let repository: SentenceRoundHistoryRepository
+
+    init(repository: SentenceRoundHistoryRepository = SentenceRoundHistoryRepository()) {
+        self.repository = repository
+        reload()
+    }
+
+    var newestFirst: [SentenceRoundHistoryRecord] {
+        records.sorted { $0.answeredAt > $1.answeredAt }
+    }
+
+    func reload() {
+        do { records = try repository.load(); error = nil }
+        catch let failure { error = failure.localizedDescription }
+    }
+
+    func append(_ answer: SentenceAnswer, roundID: UUID, topic: SentenceTopic,
+                mode: SentenceMode, questionIndex: Int, answeredAt: Date = Date()) {
+        let record = SentenceRoundHistoryRecord(roundID: roundID, topic: topic, mode: mode,
+                                                answeredAt: answeredAt, question: answer.question,
+                                                selectedID: answer.selectedID, questionIndex: questionIndex)
+        do { records = try repository.append(record); error = nil }
+        catch let failure { error = failure.localizedDescription }
+    }
 }
 
 @MainActor
@@ -284,6 +417,7 @@ struct SentenceAnswer {
 }
 
 struct SentenceRound {
+    let id = UUID()
     let topic: SentenceTopic
     let mode: SentenceMode
     let questions: [SentenceQuestion]
@@ -317,15 +451,25 @@ struct SentenceRound {
     var score: Int { answers.filter(\.correct).count }
     var incorrectIDs: Set<UUID> { Set(answers.filter { !$0.correct }.map { $0.question.id }) }
 
-    mutating func select(_ id: UUID) {
-        guard let current, !revealed, current.options.contains(where: { $0.id == id }) else { return }
+    @discardableResult
+    mutating func select(_ id: UUID) -> SentenceAnswer? {
+        guard let current, !revealed, current.options.contains(where: { $0.id == id }) else { return nil }
         selectedID = id
-        if mode == .quick { confirm() }
+        if mode == .quick { return commitAnswer() }
+        return nil
     }
 
-    mutating func confirm() {
-        guard let current, let selectedID, !revealed else { return }
-        answers.append(SentenceAnswer(question: current, selectedID: selectedID))
+    @discardableResult
+    mutating func confirm() -> SentenceAnswer? {
+        guard current != nil, selectedID != nil, !revealed else { return nil }
+        return commitAnswer()
+    }
+
+    private mutating func commitAnswer() -> SentenceAnswer? {
+        guard let current, let selectedID, !revealed else { return nil }
+        let answer = SentenceAnswer(question: current, selectedID: selectedID)
+        answers.append(answer)
+        return answer
     }
 
     mutating func advance() {

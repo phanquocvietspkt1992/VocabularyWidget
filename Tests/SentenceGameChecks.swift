@@ -47,6 +47,119 @@ struct SentenceGameChecks {
         check(saved[0].name == "First", "trimmed name")
         check(try SentenceRepository(defaults: suite).load() == saved, "reopen saved pairs")
         check(try SentenceRepository(defaults: separate).load().isEmpty, "separate suite cannot see saved topics")
+        check(suite.object(forKey: SentenceRoundHistoryRepository.key) == nil, "topic repository does not create history")
+        var historyGenerator = SeededGenerator(seed: 129)
+        let historyRound = try SentenceRound(topic: first, mode: .quick, using: &historyGenerator)
+        let historyQuestion = historyRound.questions[0]
+        let historyRecord = SentenceRoundHistoryRecord(
+            roundID: UUID(), topic: first, mode: .quick, answeredAt: Date(timeIntervalSince1970: 1234),
+            question: historyQuestion, selectedID: historyQuestion.options[0].id, questionIndex: 0
+        )
+        let historyStore = SentenceRoundHistoryRepository(defaults: suite)
+        check(try historyStore.load().isEmpty, "empty isolated round history")
+        let historySaved = try historyStore.append(historyRecord)
+        check(historySaved == [historyRecord], "append history record")
+        check(historyRecord.options.map(\.letter) == ["A", "B", "C", "D"]
+            && historyRecord.options.map(\.id) == historyQuestion.options.map(\.id)
+            && historyRecord.selectedLetter == "A"
+            && historyRecord.selectedEnglish == historyQuestion.options[0].english
+            && historyRecord.correctEnglish == historyQuestion.pair.english,
+            "history captures displayed option order and selected/correct answers")
+        check(SentenceSpeechLine.stageSelection(letter: "C", english: "Answer").map(\.text)
+            == ["C. Answer", "Final answer?"], "Stage selection speech asks confirmation after the selected answer")
+        check(SentenceSpeechLine.quickResult(letter: "B", english: "Choice", correct: true).map(\.text)
+            == ["B. Choice", "Correct."], "Quick speech queues choice before score")
+        check(SentenceSpeechLine.quickResult(letter: "D", english: "Choice", correct: false).map(\.text)
+            == ["D. Choice", "Incorrect."], "Quick incorrect speech queues choice before score")
+        check(try SentenceRoundHistoryRepository(defaults: suite).load() == historySaved, "reopen saved history")
+        check(try SentenceRoundHistoryRepository(defaults: separate).load().isEmpty, "separate suite cannot see history")
+        check(try SentenceRepository(defaults: suite).load() == saved, "history append preserves sentence topics")
+        let historyModel = SentenceRoundHistoryModel(repository: historyStore)
+        check(historyModel.newestFirst.map(\.id) == [historyRecord.id], "history model loads saved records")
+        var stageFlow = try SentenceRound(topic: first, mode: .stage)
+        let stageQuestion = stageFlow.current!
+        let stageBefore = historyModel.records.count
+        check(stageFlow.select(stageQuestion.pair.id) == nil && stageFlow.answers.isEmpty
+            && historyModel.records.count == stageBefore, "Stage selection does not score or record before confirmation")
+        let stageAnswer = stageFlow.confirm()!
+        historyModel.append(stageAnswer, roundID: stageFlow.id, topic: stageFlow.topic, mode: stageFlow.mode,
+                            questionIndex: stageFlow.index, answeredAt: Date(timeIntervalSince1970: 1236))
+        check(stageFlow.answers.count == 1 && historyModel.records.count == stageBefore + 1
+            && historyModel.records.last?.questionIndex == 0, "Stage confirmation appends exactly one zero-based question index")
+        check(stageFlow.confirm() == nil && historyModel.records.count == stageBefore + 1,
+            "repeated Stage confirmation does not append twice")
+        var quickFlow = try SentenceRound(topic: other, mode: .quick)
+        let quickQuestion = quickFlow.current!
+        let quickAnswer = quickFlow.select(quickQuestion.options[0].id)!
+        historyModel.append(quickAnswer, roundID: quickFlow.id, topic: quickFlow.topic, mode: quickFlow.mode,
+                            questionIndex: quickFlow.index, answeredAt: Date(timeIntervalSince1970: 1237))
+        check(quickFlow.answers.count == 1 && historyModel.records.count == stageBefore + 2,
+            "Quick selection scores and appends once")
+        check(quickFlow.select(quickQuestion.options[1].id) == nil
+            && historyModel.records.count == stageBefore + 2, "later Quick option tap cannot double append")
+        check(historyModel.newestFirst.map(\.answeredAt) == historyModel.newestFirst.map(\.answeredAt).sorted(by: >),
+            "history model presents newest records first")
+        check(historyModel.newestFirst.first?.topicID == other.id
+            && historyModel.newestFirst.first?.mode == .quick, "history keeps each answer's originating topic and mode")
+        let secondHistoryRecord = SentenceRoundHistoryRecord(
+            roundID: historyRecord.roundID, topic: other, mode: .stage, answeredAt: Date(timeIntervalSince1970: 1235),
+            question: quickQuestion, selectedID: quickQuestion.options[0].id, questionIndex: 1
+        )
+        let historyBeforeMixedAppend = try historyStore.load()
+        let mixedHistory = historyBeforeMixedAppend + [secondHistoryRecord]
+        check(try historyStore.append(secondHistoryRecord) == mixedHistory,
+            "retries and mixed topics append independent records")
+        let historyBaseline = suite.data(forKey: SentenceRoundHistoryRepository.key)!
+        var historyWrites = 0
+        let rejectedHistory = SentenceRoundHistoryRepository(defaults: suite, writer: { bytes in
+            historyWrites += 1
+            if historyWrites == 1 { throw SentenceGameError.writeFailed }
+            suite.set(bytes, forKey: SentenceRoundHistoryRepository.key)
+        })
+        rejects("history write rollback", expected: .historyWriteFailed) { try rejectedHistory.append(historyRecord) }
+        check(try rejectedHistory.load() == mixedHistory
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
+            "failed history append restores previous bytes")
+        historyWrites = 0
+        let mismatchedHistory = SentenceRoundHistoryRepository(defaults: suite, writer: { bytes in
+            historyWrites += 1
+            suite.set(historyWrites == 1 ? Data("bad".utf8) : bytes, forKey: SentenceRoundHistoryRepository.key)
+        })
+        rejects("history readback rollback", expected: .historyWriteFailed) { try mismatchedHistory.append(historyRecord) }
+        check(try mismatchedHistory.load() == mixedHistory
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
+            "history readback mismatch restores previous bytes")
+        var callerWrites = 0
+        let callerFailureStore = SentenceRoundHistoryRepository(defaults: suite, writer: { bytes in
+            callerWrites += 1
+            if callerWrites == 1 { throw SentenceGameError.historyWriteFailed }
+            suite.set(bytes, forKey: SentenceRoundHistoryRepository.key)
+        })
+        let callerFailureModel = SentenceRoundHistoryModel(repository: callerFailureStore)
+        let callerRecords = callerFailureModel.records
+        callerFailureModel.append(stageAnswer, roundID: stageFlow.id, topic: first, mode: .stage,
+                                  questionIndex: stageFlow.index, answeredAt: Date(timeIntervalSince1970: 1238))
+        check(callerFailureModel.records == callerRecords && callerFailureModel.error?.contains("scored") == true
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
+            "failed history write restores bytes and remains visible to caller")
+        callerWrites = 0
+        let callerReadbackStore = SentenceRoundHistoryRepository(defaults: suite, writer: { bytes in
+            callerWrites += 1
+            suite.set(callerWrites == 1 ? Data("bad".utf8) : bytes, forKey: SentenceRoundHistoryRepository.key)
+        })
+        let callerReadbackModel = SentenceRoundHistoryModel(repository: callerReadbackStore)
+        let readbackRecords = callerReadbackModel.records
+        callerReadbackModel.append(quickAnswer, roundID: quickFlow.id, topic: other, mode: .quick,
+                                   questionIndex: quickFlow.index, answeredAt: Date(timeIntervalSince1970: 1239))
+        check(callerReadbackModel.records == readbackRecords && callerReadbackModel.error?.contains("scored") == true
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
+            "readback rollback restores bytes and exposes UI error")
+        suite.set(Data("corrupt history".utf8), forKey: SentenceRoundHistoryRepository.key)
+        rejects("corrupt history read", expected: .historyUnreadable) { _ = try historyStore.load() }
+        rejects("corrupt history append", expected: .historyUnreadable) { try historyStore.append(historyRecord) }
+        check(suite.data(forKey: SentenceRoundHistoryRepository.key) == Data("corrupt history".utf8),
+            "corrupt history bytes are not overwritten")
+        suite.removeObject(forKey: SentenceRoundHistoryRepository.key)
         var spaced = first
         spaced.pairs[0].english = " \n English sentence \n "
         spaced.pairs[0].vietnamese = " Translation \n "

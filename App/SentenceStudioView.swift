@@ -22,6 +22,7 @@ private struct SentenceRecoveryDocument: FileDocument {
 
 struct SentenceStudioView: View {
     @StateObject private var model = SentenceLibraryModel()
+    @StateObject private var historyModel = SentenceRoundHistoryModel()
     @State private var editor: SentenceEditSession?
     @State private var exportingRecovery = false
     @State private var exportError: String?
@@ -29,6 +30,13 @@ struct SentenceStudioView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink {
+                        SentenceRoundHistoryView(model: historyModel)
+                    } label: {
+                        Label("Answer History", systemImage: "clock.arrow.circlepath")
+                    }
+                }
                 if let error = model.error {
                     Section {
                         Text(error).foregroundStyle(.red)
@@ -44,7 +52,7 @@ struct SentenceStudioView: View {
                 }
                 ForEach(model.topics) { topic in
                     NavigationLink {
-                        SentenceTopicView(model: model, topicID: topic.id)
+                        SentenceTopicView(model: model, historyModel: historyModel, topicID: topic.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(topic.name).font(.headline)
@@ -162,6 +170,7 @@ private struct SentenceTopicEditor: View {
 
 private struct SentenceTopicView: View {
     @ObservedObject var model: SentenceLibraryModel
+    @ObservedObject var historyModel: SentenceRoundHistoryModel
     let topicID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var mode = SentenceMode.stage
@@ -209,13 +218,50 @@ private struct SentenceTopicView: View {
             }
         }
         .sheet(item: $editor) { SentenceTopicEditor(model: model, session: $0) }
-        .fullScreenCover(item: $playSession) { SentenceGameView(initialRound: $0.round) }
+        .fullScreenCover(item: $playSession) { SentenceGameView(initialRound: $0.round, historyModel: historyModel) }
         .confirmationDialog("Delete this sentence topic and all its pairs?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete Topic", role: .destructive) {
                 do { try model.delete(topicID, expected: model.topics); dismiss() }
                 catch { self.error = error.localizedDescription }
             }
         }
+    }
+}
+
+private struct SentenceRoundHistoryView: View {
+    @ObservedObject var model: SentenceRoundHistoryModel
+
+    var body: some View {
+        List {
+            if let error = model.error {
+                Section {
+                    Text(error).foregroundStyle(.red)
+                    Button("Reload", systemImage: "arrow.clockwise") { model.reload() }
+                }
+            }
+            if model.newestFirst.isEmpty && model.error == nil {
+                ContentUnavailableView("No Answer History", systemImage: "clock.arrow.circlepath")
+            }
+            ForEach(model.newestFirst) { record in
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(record.questionVietnamese).font(.headline)
+                        Text("Chosen: \(record.selectedLetter). \(record.selectedEnglish)")
+                        Text("Correct: \(record.correctEnglish)").foregroundStyle(.secondary)
+                        Label(record.isCorrect ? "Correct" : "Incorrect",
+                              systemImage: record.isCorrect ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(record.isCorrect ? .green : .red)
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(record.topicName) · \(record.mode.rawValue)")
+                        Text(record.answeredAt.formatted(date: .abbreviated, time: .shortened))
+                    }
+                }
+            }
+        }
+        .navigationTitle("Answer History")
+        .onAppear { model.reload() }
     }
 }
 
@@ -226,6 +272,7 @@ private struct SentenceGameView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var audio = SentenceAudio()
     @StateObject private var revealController = SentenceRevealController()
+    @ObservedObject private var historyModel: SentenceRoundHistoryModel
     @State private var round: SentenceRound
     @State private var exiting = false
     @State private var initialReadRequested = false
@@ -239,9 +286,10 @@ private struct SentenceGameView: View {
     private var revealing: Bool { revealController.isRevealing }
     private let amber = Color(red: 1, green: 0.74, blue: 0.28)
 
-    init(initialRound: SentenceRound) {
+    init(initialRound: SentenceRound, historyModel: SentenceRoundHistoryModel) {
         _round = State(initialValue: initialRound)
         _audio = StateObject(wrappedValue: SentenceAudio(stage: initialRound.mode == .stage))
+        _historyModel = ObservedObject(initialValue: historyModel)
     }
 
     var body: some View {
@@ -285,6 +333,7 @@ private struct SentenceGameView: View {
                             if let error { Text(error).foregroundStyle(coral) }
                             if let error = audio.error { Text(error).font(.footnote).foregroundStyle(coral) }
                             if let error = audio.narrationError { Text(error).font(.footnote).foregroundStyle(coral) }
+                            if let error = historyModel.error { Text(error).font(.footnote).foregroundStyle(coral) }
                         }
                         .padding(round.mode == .stage ? 12 : 16)
                         .frame(maxWidth: round.mode == .stage ? 960 : 700).frame(maxWidth: .infinity)
@@ -407,7 +456,8 @@ private struct SentenceGameView: View {
                     .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent).tint(amber).foregroundStyle(.black)
-            .disabled(round.selectedID == nil || revealing || scenePhase != .active)
+            .disabled(round.selectedID == nil || revealing || scenePhase != .active
+                || (audio.narratorEnabled && audio.narration.pending))
         } else {
             Button {} label: {
                 Label("Choose an Answer", systemImage: "hand.tap")
@@ -443,8 +493,17 @@ private struct SentenceGameView: View {
         return Button {
             guard !revealing, scenePhase == .active else { return }
             audio.stopNarration()
-            round.select(option.id)
-            audio.play(round.mode == .quick ? (round.answers.last?.correct == true ? .correct : .incorrect) : .select)
+            let letter = ["A", "B", "C", "D"][index]
+            if let answer = round.select(option.id) {
+                historyModel.append(answer, roundID: round.id, topic: round.topic, mode: round.mode,
+                                    questionIndex: round.index)
+                audio.readQuickResult(letter: letter, english: option.english, correct: answer.correct) {
+                    audio.play(answer.correct ? .correct : .incorrect)
+                }
+            } else if round.mode == .stage {
+                if audio.narratorEnabled { audio.readStageSelection(letter: letter, english: option.english) }
+                else { audio.play(.select) }
+            }
         } label: {
             HStack(alignment: .top, spacing: 14) {
                 Text(["A", "B", "C", "D"][index]).font(.headline.monospaced()).frame(width: 22)
@@ -505,8 +564,13 @@ private struct SentenceGameView: View {
         let questionID = round.current?.id
         revealController.begin {
             guard scenePhase == .active, round.current?.id == questionID else { return }
-            round.confirm()
-            audio.play(round.answers.last?.correct == true ? .correct : .incorrect)
+            if let answer = round.confirm() {
+                historyModel.append(answer, roundID: round.id, topic: round.topic, mode: round.mode,
+                                    questionIndex: round.index)
+                audio.readResult(correct: answer.correct) {
+                    audio.play(answer.correct ? .correct : .incorrect)
+                }
+            }
         }
     }
 

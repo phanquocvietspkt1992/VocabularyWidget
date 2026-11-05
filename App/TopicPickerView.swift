@@ -53,44 +53,54 @@ struct TopicPickerView: View {
 
     var body: some View {
         NavigationStack {
-            List(VocabularyCatalog.topics) { topic in
-                NavigationLink {
-                    VocabularyTopicDetailView(topicID: topic.id, model: model, detailRouter: detailRouter, onSelect: selectTopic)
-                } label: {
-                    HStack(spacing: 14) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(topic.name).font(.headline).foregroundStyle(.primary)
-                            Text(subtitle(for: topic))
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if model.selectedID == topic.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.title3).foregroundStyle(.blue)
-                        }
+            List {
+                Section {
+                    Button { model.showingSchedule = true } label: {
+                        Label("Study Schedule & Notifications", systemImage: "clock")
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(topic.name). \(subtitle(for: topic))")
-                .accessibilityValue(model.selectedID == topic.id ? "Selected" : "Not selected")
-                .accessibilityHint("View words and examples")
-                .contextMenu {
-                    Button(role: .destructive) {
-                        model.resetTopicID = topic.id
-                        model.showingResetConfirmation = true
-                    } label: {
-                        Label("Restart Progress", systemImage: "arrow.counterclockwise")
-                    }
-                    if !VocabularyCatalog.builtInTopicIDs.contains(topic.id) {
-                        Divider()
-                        Button(role: .destructive) {
-                            model.deleteTopicID = topic.id
-                            model.deleteTopicName = topic.name
-                            model.deleteTopicError = nil
-                            model.showingDeleteTopicConfirmation = true
+                Section("Topics") {
+                    ForEach(VocabularyCatalog.topics) { topic in
+                        NavigationLink {
+                            VocabularyTopicDetailView(topicID: topic.id, model: model, detailRouter: detailRouter, onSelect: selectTopic)
                         } label: {
-                            Label("Delete Topic", systemImage: "trash")
+                            HStack(spacing: 14) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(topic.name).font(.headline).foregroundStyle(.primary)
+                                    Text(subtitle(for: topic))
+                                        .font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if model.selectedID == topic.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.title3).foregroundStyle(.blue)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(topic.name). \(subtitle(for: topic))")
+                        .accessibilityValue(model.selectedID == topic.id ? "Selected" : "Not selected")
+                        .accessibilityHint("View words and examples")
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                model.resetTopicID = topic.id
+                                model.showingResetConfirmation = true
+                            } label: {
+                                Label("Restart Progress", systemImage: "arrow.counterclockwise")
+                            }
+                            if !VocabularyCatalog.builtInTopicIDs.contains(topic.id) {
+                                Divider()
+                                Button(role: .destructive) {
+                                    model.deleteTopicID = topic.id
+                                    model.deleteTopicName = topic.name
+                                    model.deleteTopicError = nil
+                                    model.showingDeleteTopicConfirmation = true
+                                } label: {
+                                    Label("Delete Topic", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
@@ -108,9 +118,6 @@ struct TopicPickerView: View {
             }
             .sheet(isPresented: $model.showingReview, onDismiss: { drainWordDetail(after: "review") }) { VocabularyDailyReviewView() }
             .toolbar {
-                ToolbarItem(placement: .bottomBar) {
-                    Button { model.showingSchedule = true } label: { Label("Study Schedule & Notifications", systemImage: "clock") }
-                }
                 ToolbarItem(placement: .bottomBar) {
                     Button { model.showingReview = true } label: { Label("Daily Review", systemImage: "rectangle.on.rectangle") }
                 }

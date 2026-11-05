@@ -107,6 +107,16 @@ struct SentenceSpeechLine: Equatable {
             Self(text: "\($0.0). \($0.1.english)")
         }
     }
+
+    static func stageSelection(letter: String, english: String) -> [Self] {
+        [Self(text: "\(letter). \(english)"), Self(text: "Final answer?")]
+    }
+
+    static func quickResult(letter: String, english: String, correct: Bool) -> [Self] {
+        [Self(text: "\(letter). \(english)"), Self(text: correct ? "Correct." : "Incorrect.")]
+    }
+
+    static func result(correct: Bool) -> Self { Self(text: correct ? "Correct." : "Incorrect.") }
 }
 
 struct SentenceEnglishVoice: Identifiable, Equatable {
@@ -195,6 +205,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     private var synthesizer: AVSpeechSynthesizer?
     private var speechGeneration: UUID?
     private var utterances: [AVSpeechUtterance] = []
+    private var speechCompletion: (() -> Void)?
     private var startup: Task<Void, Never>?
     private var retired: [UUID: AVSpeechSynthesizer] = [:]
     private let waves = Dictionary(uniqueKeysWithValues: SentenceSound.allCases.map { ($0, $0.wave()) })
@@ -291,10 +302,27 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
 
     func listen(_ question: SentenceQuestion) {
+        speak(SentenceSpeechLine.plan(for: question))
+    }
+
+    func readStageSelection(letter: String, english: String) {
+        speak(SentenceSpeechLine.stageSelection(letter: letter, english: english))
+    }
+
+    func readQuickResult(letter: String, english: String, correct: Bool, completion: @escaping () -> Void) {
+        speak(SentenceSpeechLine.quickResult(letter: letter, english: english, correct: correct), completion: completion)
+    }
+
+    func readResult(correct: Bool, completion: @escaping () -> Void) {
+        speak([SentenceSpeechLine.result(correct: correct)], completion: completion)
+    }
+
+    private func speak(_ plan: [SentenceSpeechLine], completion: (() -> Void)? = nil) {
         stopNarration()
-        guard narratorEnabled else { return }
+        guard narratorEnabled else { completion?(); return }
         guard policy.permitsNarration else {
             narrationError = "Narrator unavailable: resume audio while the app is active."
+            completion?()
             return
         }
         let available = AVSpeechSynthesisVoice.speechVoices()
@@ -303,9 +331,9 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         guard let choice = SentenceEnglishVoice.selected(englishVoiceID, installed: available),
               let voice = AVSpeechSynthesisVoice(identifier: choice.id) else {
             narrationError = "Narrator unavailable: no selected installed English voice."
+                        completion?()
             return
         }
-        let plan = SentenceSpeechLine.plan(for: question)
         let reading = plan.map { line in
             let utterance = AVSpeechUtterance(string: line.text)
             utterance.voice = voice
@@ -318,6 +346,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             try session.setActive(true)
         } catch {
             narrationError = "Narrator unavailable: \(error.localizedDescription)"
+            completion?()
             return
         }
         stopEffect()
@@ -328,6 +357,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         synthesizer = speaker
         speechGeneration = token
         utterances = reading
+        speechCompletion = completion
         policy.narrating = true
         music?.volume = policy.musicVolume
         startup = Task { @MainActor [weak self] in
@@ -347,6 +377,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         synthesizer = nil
         speechGeneration = nil
         utterances = []
+        speechCompletion = nil
         policy.narrating = false
         music?.volume = policy.musicVolume
         if let old {
@@ -377,7 +408,11 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             guard let self, self.synthesizer === synthesizer,
                 let token = self.speechGeneration, token == self.narration.generation,
                 self.utterances.last === utterance else { return }
-            if self.narration.finished(token) { self.stopNarration() }
+            if self.narration.finished(token) {
+                let completion = self.speechCompletion
+                self.stopNarration()
+                completion?()
+            }
         }
     }
 
