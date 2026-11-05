@@ -97,6 +97,7 @@ struct SentenceTopic: Codable, Equatable, Identifiable {
 enum SentenceGameError: LocalizedError, Equatable {
     case invalidTopic, duplicatePair, duplicateTopic, invalidPaste, unreadable, writeFailed, recoveryFailed
     case historyUnreadable, historyWriteFailed, historyRecoveryFailed, stale, tooSmall
+    case sessionUnreadable, sessionMissing, sessionWriteFailed, sessionRecoveryFailed
 
     var errorDescription: String? {
         switch self {
@@ -112,6 +113,10 @@ enum SentenceGameError: LocalizedError, Equatable {
         case .historyRecoveryFailed: return "The answer was scored, but saving and restoring history failed. History editing is locked."
         case .stale: return "Saved topics changed. Reopen the editor before saving again."
         case .tooSmall: return "At least four distinct sentence pairs are needed to play."
+        case .sessionUnreadable: return "Saved sentence rounds cannot be read. They have not been replaced."
+        case .sessionMissing: return "There is no saved round for this topic and mode."
+        case .sessionWriteFailed: return "The round could not be saved. Previous saved rounds were restored."
+        case .sessionRecoveryFailed: return "Saving and recovery failed. Saved round editing is locked."
         }
     }
 }
@@ -306,6 +311,20 @@ final class SentenceRoundHistoryRepository {
         }
         return try load()
     }
+
+    func appendOnce(_ record: SentenceRoundHistoryRecord) throws -> [SentenceRoundHistoryRecord] {
+        let previous = try load()
+        if let existing = previous.first(where: { $0.roundID == record.roundID && $0.questionIndex == record.questionIndex }) {
+            guard existing.topicID == record.topicID, existing.topicName == record.topicName,
+                existing.mode == record.mode,
+                  existing.questionVietnamese == record.questionVietnamese,
+                  existing.correctEnglish == record.correctEnglish, existing.options == record.options,
+                  existing.selectedID == record.selectedID, existing.selectedEnglish == record.selectedEnglish,
+                  existing.isCorrect == record.isCorrect else { throw SentenceGameError.historyWriteFailed }
+            return previous
+        }
+        return try append(record)
+    }
 }
 
 @MainActor
@@ -313,6 +332,7 @@ final class SentenceRoundHistoryModel: ObservableObject {
     @Published private(set) var records: [SentenceRoundHistoryRecord] = []
     @Published private(set) var error: String?
     private let repository: SentenceRoundHistoryRepository
+    private var pending: [String: SentenceRoundHistoryRecord] = [:]
 
     init(repository: SentenceRoundHistoryRepository = SentenceRoundHistoryRepository()) {
         self.repository = repository
@@ -335,6 +355,41 @@ final class SentenceRoundHistoryModel: ObservableObject {
                                                 selectedID: answer.selectedID, questionIndex: questionIndex)
         do { records = try repository.append(record); error = nil }
         catch let failure { error = failure.localizedDescription }
+    }
+
+    func recordCommitted(_ answer: SentenceAnswer, roundID: UUID, topic: SentenceTopic,
+                         mode: SentenceMode, questionIndex: Int, answeredAt: Date = Date()) {
+        let key = "\(roundID.uuidString).\(questionIndex)"
+        let record = pending[key] ?? SentenceRoundHistoryRecord(
+            roundID: roundID, topic: topic, mode: mode, answeredAt: answeredAt,
+            question: answer.question, selectedID: answer.selectedID, questionIndex: questionIndex
+        )
+        pending[key] = record
+        do {
+            records = try repository.appendOnce(record)
+            pending.removeValue(forKey: key)
+            if pending.isEmpty { error = nil }
+        } catch let failure { error = failure.localizedDescription }
+    }
+
+    func retryPending() {
+        for (key, record) in pending.sorted(by: { $0.value.answeredAt < $1.value.answeredAt }) {
+            do {
+                records = try repository.appendOnce(record)
+                pending.removeValue(forKey: key)
+                error = nil
+            } catch let failure {
+                error = failure.localizedDescription
+                return
+            }
+        }
+    }
+
+    func reconcile(_ round: SentenceRound) {
+        for (questionIndex, answer) in round.answers.enumerated() {
+            recordCommitted(answer, roundID: round.id, topic: round.topic,
+                            mode: round.mode, questionIndex: questionIndex)
+        }
     }
 }
 
@@ -410,14 +465,14 @@ struct SentenceQuestion: Identifiable {
     var id: UUID { pair.id }
 }
 
-struct SentenceAnswer {
+struct SentenceAnswer: Codable, Equatable {
     let question: SentenceQuestion
     let selectedID: UUID
     var correct: Bool { selectedID == question.pair.id }
 }
 
 struct SentenceRound {
-    let id = UUID()
+    let id: UUID
     let topic: SentenceTopic
     let mode: SentenceMode
     let questions: [SentenceQuestion]
@@ -427,6 +482,7 @@ struct SentenceRound {
 
     init<Generator: RandomNumberGenerator>(topic: SentenceTopic, mode: SentenceMode,
                                           retryIDs: Set<UUID>? = nil, using generator: inout Generator) throws {
+        id = UUID()
         self.topic = try topic.validated()
         self.mode = mode
         guard self.topic.pairs.count >= 4 else { throw SentenceGameError.tooSmall }
@@ -476,5 +532,243 @@ struct SentenceRound {
         guard revealed else { return }
         index += 1
         selectedID = nil
+    }
+
+    fileprivate init(snapshot: SentenceRoundSnapshot) throws {
+        try snapshot.validate()
+        id = snapshot.roundID
+        topic = snapshot.topic
+        mode = snapshot.mode
+        questions = snapshot.questions
+        answers = snapshot.answers
+        selectedID = snapshot.selectedID
+        index = snapshot.index
+    }
+}
+
+struct SentenceRoundSnapshot: Codable, Equatable {
+    let roundID: UUID
+    let topic: SentenceTopic
+    let mode: SentenceMode
+    let questions: [SentenceQuestion]
+    let answers: [SentenceAnswer]
+    let selectedID: UUID?
+    let index: Int
+
+    init(round: SentenceRound) {
+        roundID = round.id
+        topic = round.topic
+        mode = round.mode
+        questions = round.questions
+        answers = round.answers
+        selectedID = round.selectedID
+        index = round.index
+    }
+
+    var finished: Bool { index == questions.count }
+    var score: Int { answers.filter(\.correct).count }
+
+    func restore() throws -> SentenceRound { try SentenceRound(snapshot: self) }
+
+    fileprivate func validate() throws {
+        guard try topic.validated() == topic,
+              !questions.isEmpty, questions.count <= topic.pairs.count,
+              index >= 0, index <= questions.count,
+              answers.count == index || (index < questions.count && answers.count == index + 1),
+              Set(questions.map(\.id)).count == questions.count else {
+            throw SentenceGameError.sessionUnreadable
+        }
+        let pairs = Dictionary(uniqueKeysWithValues: topic.pairs.map { ($0.id, $0) })
+        for question in questions {
+            guard pairs[question.id] == question.pair,
+                  question.options.count == 4,
+                  Set(question.options.map(\.id)).count == 4,
+                  question.options.allSatisfy({ pairs[$0.id] == $0 }),
+                  question.options.filter({ $0.id == question.id }).count == 1 else {
+                throw SentenceGameError.sessionUnreadable
+            }
+        }
+        for (answerIndex, answer) in answers.enumerated() {
+            guard answerIndex < questions.count,
+                  answer.question == questions[answerIndex],
+                  answer.question.options.contains(where: { $0.id == answer.selectedID }) else {
+                throw SentenceGameError.sessionUnreadable
+            }
+        }
+        if answers.count > index {
+            guard selectedID == answers[index].selectedID else { throw SentenceGameError.sessionUnreadable }
+        }
+        if let selectedID {
+            guard index < questions.count,
+                  questions[index].options.contains(where: { $0.id == selectedID }),
+                  mode == .stage || answers.count > index else {
+                throw SentenceGameError.sessionUnreadable
+            }
+        }
+    }
+}
+
+extension SentenceQuestion: Codable, Equatable {}
+
+struct SentenceSavedRound: Codable, Equatable, Identifiable {
+    let round: SentenceRoundSnapshot
+    let savedAt: Date
+    var id: String { Self.slot(topicID: round.topic.id, mode: round.mode) }
+    var topicID: UUID { round.topic.id }
+    var mode: SentenceMode { round.mode }
+
+    static func slot(topicID: UUID, mode: SentenceMode) -> String { "\(topicID.uuidString).\(mode.rawValue)" }
+}
+
+final class SentenceRoundSessionRepository {
+    static let key = "sentenceGameSessions.v1"
+    private struct Archive: Codable { let version: Int; let sessions: [SentenceSavedRound] }
+    private let defaults: UserDefaults
+    private let writer: ((Any?) throws -> Void)?
+    private let reader: (() -> Any?)?
+    private(set) var isLocked = false
+
+    init(defaults: UserDefaults = .standard, writer: ((Any?) throws -> Void)? = nil, reader: (() -> Any?)? = nil) {
+        self.defaults = defaults
+        self.writer = writer
+        self.reader = reader
+    }
+
+    private func raw() -> Any? { reader.map { $0() } ?? defaults.object(forKey: Self.key) }
+
+    func loadAll() throws -> [SentenceSavedRound] {
+        guard let value = raw() else { return [] }
+        guard let bytes = value as? Data else { throw SentenceGameError.sessionUnreadable }
+        do {
+            let archive = try JSONDecoder().decode(Archive.self, from: bytes)
+            guard archive.version == 1,
+                  Set(archive.sessions.map(\.id)).count == archive.sessions.count else {
+                throw SentenceGameError.sessionUnreadable
+            }
+            for session in archive.sessions { try session.round.validate() }
+            return archive.sessions.sorted { $0.savedAt > $1.savedAt }
+        } catch { throw SentenceGameError.sessionUnreadable }
+    }
+
+    func load(topicID: UUID, mode: SentenceMode) throws -> SentenceSavedRound? {
+        try loadAll().first { $0.id == SentenceSavedRound.slot(topicID: topicID, mode: mode) }
+    }
+
+    @discardableResult
+    func save(_ round: SentenceRound, savedAt: Date = Date()) throws -> SentenceSavedRound {
+        guard !isLocked else { throw SentenceGameError.sessionRecoveryFailed }
+        let previous = try loadAll()
+        let oldBytes = raw() as? Data
+        let snapshot = SentenceRoundSnapshot(round: round)
+        try snapshot.validate()
+        let saved = SentenceSavedRound(round: snapshot, savedAt: savedAt)
+        let slot = saved.id
+        let replacement = (previous.filter { $0.id != slot } + [saved]).sorted { $0.savedAt > $1.savedAt }
+        try persist(replacement, previous: previous, oldBytes: oldBytes)
+        return saved
+    }
+
+    func remove(topicID: UUID, mode: SentenceMode) throws {
+        let slot = SentenceSavedRound.slot(topicID: topicID, mode: mode)
+        try update { $0.filter { $0.id != slot } }
+    }
+
+    func remove(topicID: UUID) throws {
+        try update { $0.filter { $0.topicID != topicID } }
+    }
+
+    private func update(_ transform: ([SentenceSavedRound]) -> [SentenceSavedRound]) throws {
+        guard !isLocked else { throw SentenceGameError.sessionRecoveryFailed }
+        let previous = try loadAll()
+        let replacement = transform(previous)
+        guard replacement != previous else { return }
+        try persist(replacement, previous: previous, oldBytes: raw() as? Data)
+    }
+
+    private func persist(_ sessions: [SentenceSavedRound], previous: [SentenceSavedRound], oldBytes: Data?) throws {
+        let bytes = try JSONEncoder().encode(Archive(version: 1, sessions: sessions))
+        let write = writer ?? { value in
+            if let value { self.defaults.set(value, forKey: Self.key) }
+            else { self.defaults.removeObject(forKey: Self.key) }
+        }
+        do {
+            try write(bytes)
+            guard raw() as? Data == bytes, try loadAll() == sessions else { throw SentenceGameError.sessionWriteFailed }
+        } catch {
+            do {
+                try write(oldBytes)
+                guard raw() as? Data == oldBytes, try loadAll() == previous else { throw SentenceGameError.sessionWriteFailed }
+            } catch {
+                isLocked = true
+                throw SentenceGameError.sessionRecoveryFailed
+            }
+            throw SentenceGameError.sessionWriteFailed
+        }
+    }
+}
+
+@MainActor
+final class SentenceRoundSessionModel: ObservableObject {
+    @Published private(set) var sessions: [SentenceSavedRound] = []
+    @Published private(set) var error: String?
+    private let repository: SentenceRoundSessionRepository
+
+    init(repository: SentenceRoundSessionRepository = SentenceRoundSessionRepository()) {
+        self.repository = repository
+        reload()
+    }
+
+    func session(topicID: UUID, mode: SentenceMode) -> SentenceSavedRound? {
+        sessions.first { $0.id == SentenceSavedRound.slot(topicID: topicID, mode: mode) }
+    }
+
+    func reload() {
+        do { sessions = try repository.loadAll(); error = nil }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func start(topic: SentenceTopic, mode: SentenceMode) throws -> SentenceRound {
+        do {
+            let round = try SentenceRound(topic: topic, mode: mode)
+            try save(round)
+            return round
+        } catch { throw error }
+    }
+
+    func resume(topicID: UUID, mode: SentenceMode) throws -> SentenceRound {
+        do {
+            guard let saved = try repository.load(topicID: topicID, mode: mode) else {
+                throw SentenceGameError.sessionMissing
+            }
+            let round = try saved.round.restore()
+            sessions = try repository.loadAll()
+            error = nil
+            return round
+        } catch {
+            self.error = error.localizedDescription
+            throw error
+        }
+    }
+
+    func save(_ round: SentenceRound) throws {
+        do {
+            _ = try repository.save(round)
+            sessions = try repository.loadAll()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+            throw error
+        }
+    }
+
+    func remove(topicID: UUID) throws {
+        do {
+            try repository.remove(topicID: topicID)
+            sessions = try repository.loadAll()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+            throw error
+        }
     }
 }

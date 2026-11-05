@@ -74,6 +74,99 @@ struct SentenceGameChecks {
         check(try SentenceRoundHistoryRepository(defaults: suite).load() == historySaved, "reopen saved history")
         check(try SentenceRoundHistoryRepository(defaults: separate).load().isEmpty, "separate suite cannot see history")
         check(try SentenceRepository(defaults: suite).load() == saved, "history append preserves sentence topics")
+        let sessionStore = SentenceRoundSessionRepository(defaults: suite)
+        var pendingGenerator = SeededGenerator(seed: 774)
+        var pendingRound = try SentenceRound(topic: first, mode: .stage, using: &pendingGenerator)
+        let pendingQuestion = pendingRound.current!
+        let pendingChoice = pendingQuestion.options[2].id
+        pendingRound.select(pendingChoice)
+        let topicBytes = suite.data(forKey: SentenceRepository.key)
+        let historyBytes = suite.data(forKey: SentenceRoundHistoryRepository.key)
+        let pendingSaved = try sessionStore.save(pendingRound, savedAt: Date(timeIntervalSince1970: 1240))
+        let pendingReloaded = try sessionStore.load(topicID: first.id, mode: .stage)!.round.restore()
+        check(pendingReloaded.id == pendingRound.id && pendingReloaded.topic == first
+            && pendingReloaded.questions == pendingRound.questions
+            && pendingReloaded.current?.options == pendingQuestion.options
+            && pendingReloaded.selectedID == pendingChoice && pendingReloaded.answers.isEmpty,
+            "pending Stage round restores snapshot, option order, and uncommitted selection")
+        check(SentenceRoundSnapshot(round: try pendingSaved.round.restore()) == SentenceRoundSnapshot(round: pendingReloaded),
+            "saved round snapshot restores exactly")
+        var quickSavedRound = try SentenceRound(topic: first, mode: .quick)
+        let quickSavedQuestion = quickSavedRound.current!
+        let quickSavedAnswer = quickSavedRound.select(quickSavedQuestion.options[1].id)!
+        let quickSession = try sessionStore.save(quickSavedRound)
+        let quickReloaded = try sessionStore.load(topicID: first.id, mode: .quick)!.round.restore()
+        check(quickReloaded.questions == quickSavedRound.questions && quickReloaded.answers == [quickSavedAnswer]
+            && quickReloaded.selectedID == quickSavedAnswer.selectedID && quickReloaded.index == 0,
+            "Quick auto-score and displayed options restore exactly")
+        var completedRound = try SentenceRound(topic: other, mode: .stage)
+        while let question = completedRound.current {
+            completedRound.select(question.pair.id)
+            completedRound.confirm()
+            completedRound.advance()
+        }
+        let completedSaved = try sessionStore.save(completedRound)
+        let completedReloaded = try sessionStore.load(topicID: other.id, mode: .stage)!.round.restore()
+        check(completedReloaded.finished && completedReloaded.answers == completedRound.answers
+            && completedReloaded.score == completedRound.score && completedReloaded.id == completedRound.id,
+            "completed round restores results without rerolling")
+        let allSessions = try sessionStore.loadAll()
+        let savedQuickSession = try sessionStore.load(topicID: first.id, mode: .quick)
+        let savedCompletedSession = try sessionStore.load(topicID: other.id, mode: .stage)
+        check(allSessions.count == 3 && savedQuickSession?.id == quickSession.id
+            && savedCompletedSession?.id == completedSaved.id,
+            "sessions remain isolated by topic and mode")
+        check(allSessions.map(\.savedAt) == allSessions.map(\.savedAt).sorted(by: >),
+            "saved sessions are listed newest first")
+        check(suite.data(forKey: SentenceRepository.key) == topicBytes
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBytes,
+            "round sessions do not mutate topic or answer history stores")
+        let sessionBaseline = suite.data(forKey: SentenceRoundSessionRepository.key)!
+        var sessionWrites = 0
+        let rejectedSessions = SentenceRoundSessionRepository(defaults: suite, writer: { bytes in
+            sessionWrites += 1
+            if sessionWrites == 1 { throw SentenceGameError.sessionWriteFailed }
+            suite.set(bytes, forKey: SentenceRoundSessionRepository.key)
+        })
+        rejects("session write rollback", expected: .sessionWriteFailed) {
+            try rejectedSessions.save(pendingRound)
+        }
+        check(try rejectedSessions.loadAll() == sessionStore.loadAll()
+            && suite.data(forKey: SentenceRoundSessionRepository.key) == sessionBaseline,
+            "failed session write restores previous bytes and sessions")
+        sessionWrites = 0
+        let mismatchedSessions = SentenceRoundSessionRepository(defaults: suite, writer: { bytes in
+            sessionWrites += 1
+            suite.set(sessionWrites == 1 ? Data("bad".utf8) : bytes, forKey: SentenceRoundSessionRepository.key)
+        })
+        rejects("session readback rollback", expected: .sessionWriteFailed) {
+            try mismatchedSessions.save(pendingRound)
+        }
+        check(try mismatchedSessions.loadAll() == sessionStore.loadAll()
+            && suite.data(forKey: SentenceRoundSessionRepository.key) == sessionBaseline,
+            "session readback mismatch restores previous bytes")
+        suite.set(Data("corrupt sessions".utf8), forKey: SentenceRoundSessionRepository.key)
+        rejects("corrupt session read", expected: .sessionUnreadable) { _ = try sessionStore.loadAll() }
+        rejects("corrupt session save", expected: .sessionUnreadable) { try sessionStore.save(pendingRound) }
+        check(suite.data(forKey: SentenceRoundSessionRepository.key) == Data("corrupt sessions".utf8),
+            "corrupt session data is never overwritten")
+        suite.set(sessionBaseline, forKey: SentenceRoundSessionRepository.key)
+        try sessionStore.remove(topicID: first.id, mode: .stage)
+        let afterModeRemoval = try sessionStore.loadAll()
+        let removedStageSession = try sessionStore.load(topicID: first.id, mode: .stage)
+        let remainingQuickSession = try sessionStore.load(topicID: first.id, mode: .quick)
+        let remainingOtherSession = try sessionStore.load(topicID: other.id, mode: .stage)
+        check(afterModeRemoval.count == 2
+            && removedStageSession == nil && remainingQuickSession != nil && remainingOtherSession != nil,
+            "mode removal preserves the other mode and topic sessions")
+        suite.set(sessionBaseline, forKey: SentenceRoundSessionRepository.key)
+        try sessionStore.remove(topicID: first.id)
+        let remainingSessions = try sessionStore.loadAll()
+        let removedStage = try sessionStore.load(topicID: first.id, mode: .stage)
+        let removedQuick = try sessionStore.load(topicID: first.id, mode: .quick)
+        check(remainingSessions.map(\.id) == [completedSaved.id]
+            && removedStage == nil && removedQuick == nil,
+            "topic removal clears its saved modes and preserves other topics")
         let historyModel = SentenceRoundHistoryModel(repository: historyStore)
         check(historyModel.newestFirst.map(\.id) == [historyRecord.id], "history model loads saved records")
         var stageFlow = try SentenceRound(topic: first, mode: .stage)
@@ -154,6 +247,30 @@ struct SentenceGameChecks {
         check(callerReadbackModel.records == readbackRecords && callerReadbackModel.error?.contains("scored") == true
             && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
             "readback rollback restores bytes and exposes UI error")
+        var retryRound = try SentenceRound(topic: other, mode: .quick)
+        let retryAnswer = retryRound.select(retryRound.current!.options[0].id)!
+        var retryWrites = 0
+        let retryRepository = SentenceRoundHistoryRepository(defaults: suite, writer: { bytes in
+            retryWrites += 1
+            if retryWrites == 1 { throw SentenceGameError.historyWriteFailed }
+            suite.set(bytes, forKey: SentenceRoundHistoryRepository.key)
+        })
+        let retryHistoryModel = SentenceRoundHistoryModel(repository: retryRepository)
+        retryHistoryModel.recordCommitted(retryAnswer, roundID: retryRound.id, topic: other, mode: .quick,
+                                          questionIndex: 0, answeredAt: Date(timeIntervalSince1970: 1241))
+        check(retryHistoryModel.error != nil && retryHistoryModel.records == mixedHistory
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBaseline,
+            "failed committed history remains visible and queued for retry")
+        let reopenedHistoryModel = SentenceRoundHistoryModel(repository: historyStore)
+        reopenedHistoryModel.reconcile(retryRound)
+        retryHistoryModel.retryPending()
+        retryHistoryModel.recordCommitted(retryAnswer, roundID: retryRound.id, topic: other, mode: .quick,
+                                          questionIndex: 0, answeredAt: Date(timeIntervalSince1970: 1242))
+        let retriedRecords = try historyStore.load()
+        check(retryHistoryModel.error == nil && reopenedHistoryModel.error == nil
+            && retriedRecords.filter { $0.roundID == retryRound.id && $0.questionIndex == 0 }.count == 1
+            && retriedRecords.count == mixedHistory.count + 1,
+            "history retry and resumed-round reconciliation append exactly once")
         suite.set(Data("corrupt history".utf8), forKey: SentenceRoundHistoryRepository.key)
         rejects("corrupt history read", expected: .historyUnreadable) { _ = try historyStore.load() }
         rejects("corrupt history append", expected: .historyUnreadable) { try historyStore.append(historyRecord) }
@@ -291,6 +408,8 @@ struct SentenceGameChecks {
             check(plan.count == 4, "narration contains only four English answer choices")
             check(plan.map(\.text) == zip(["A", "B", "C", "D"], question.options).map { "\($0.0). \($0.1.english)" }, "display shuffle and labels exact, no prompt or correctness hints")
         }
+        check(SentenceNarrationProfile.voiceLanguage == "en-US", "game uses the Vocabulary English voice language")
+        check(SentenceNarrationProfile.rate(defaultRate: 0.5) == 0.5, "game retains the default Vocabulary speech rate")
         check(first == sourceSnapshot, "speech plan does not mutate source")
         var narration = SentenceNarrationState()
         check(narration.shouldAutoRead, "new questions auto-read in every mode")
@@ -326,12 +445,6 @@ struct SentenceGameChecks {
             narration.cancel()
             check(!narration.pending && !narration.speaking, "\(reason): immediate invalidation")
         }
-        let voices = [SentenceEnglishVoice(id: "en", name: "English"),
-                  SentenceEnglishVoice(id: "en-uk", name: "English UK")]
-        check(SentenceEnglishVoice.selected("en", installed: voices) == voices[0], "installed English voice selected")
-        check(SentenceEnglishVoice.selected("missing", installed: voices) == nil, "removed English voice rejected")
-        check(SentenceEnglishVoice.supportsEnglish("en-US") && SentenceEnglishVoice.supportsEnglish("EN_gb"), "English locale variants accepted")
-        check(!SentenceEnglishVoice.supportsEnglish("vi-VN") && !SentenceEnglishVoice.supportsEnglish("fr-FR"), "non-English voice excluded")
         for size in 4...5 {
             check(try SentenceRound(topic: topic("Size", count: size), mode: .quick).questions.count == size, "Quick uses available pairs up to five")
         }

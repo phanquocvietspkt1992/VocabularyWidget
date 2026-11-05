@@ -119,18 +119,9 @@ struct SentenceSpeechLine: Equatable {
     static func result(correct: Bool) -> Self { Self(text: correct ? "Correct." : "Incorrect.") }
 }
 
-struct SentenceEnglishVoice: Identifiable, Equatable {
-    let id: String
-    let name: String
-
-    static func supportsEnglish(_ language: String) -> Bool {
-        let normalized = language.replacingOccurrences(of: "_", with: "-").lowercased()
-        return normalized == "en" || normalized.hasPrefix("en-")
-    }
-
-    static func selected(_ id: String, installed: [Self]) -> Self? {
-        installed.first { $0.id == id }
-    }
+enum SentenceNarrationProfile {
+    static let voiceLanguage = "en-US"
+    static func rate(defaultRate: Float) -> Float { defaultRate }
 }
 
 struct SentenceNarrationState {
@@ -194,8 +185,6 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     @Published var narratorEnabled = true {
         didSet { narration.enabled = narratorEnabled; if !narratorEnabled { stopNarration() } }
     }
-    @Published var englishVoiceID: String { didSet { stopNarration() } }
-    let installedEnglishVoices: [SentenceEnglishVoice]
     @Published var musicEnabled = true { didSet { policy.musicEnabled = musicEnabled; updateMusic() } }
     @Published var effectsEnabled = true { didSet { policy.effectsEnabled = effectsEnabled; if !effectsEnabled { effect?.stop() } } }
     private var policy = SentenceAudioPolicy()
@@ -211,11 +200,6 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     private let waves = Dictionary(uniqueKeysWithValues: SentenceSound.allCases.map { ($0, $0.wave()) })
 
     init(stage: Bool = false) {
-        let voices = AVSpeechSynthesisVoice.speechVoices().filter {
-            SentenceEnglishVoice.supportsEnglish($0.language)
-        }
-        installedEnglishVoices = voices.map { SentenceEnglishVoice(id: $0.identifier, name: $0.name) }
-        englishVoiceID = voices.first { $0.language == "en-US" }?.identifier ?? voices.first?.identifier ?? ""
         narration = SentenceNarrationState()
         super.init()
         let center = NotificationCenter.default
@@ -325,19 +309,10 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             completion?()
             return
         }
-        let available = AVSpeechSynthesisVoice.speechVoices()
-            .filter { SentenceEnglishVoice.supportsEnglish($0.language) }
-            .map { SentenceEnglishVoice(id: $0.identifier, name: $0.name) }
-        guard let choice = SentenceEnglishVoice.selected(englishVoiceID, installed: available),
-              let voice = AVSpeechSynthesisVoice(identifier: choice.id) else {
-            narrationError = "Narrator unavailable: no selected installed English voice."
-                        completion?()
-            return
-        }
         let reading = plan.map { line in
             let utterance = AVSpeechUtterance(string: line.text)
-            utterance.voice = voice
-            utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.9
+            utterance.voice = AVSpeechSynthesisVoice(language: SentenceNarrationProfile.voiceLanguage)
+            utterance.rate = SentenceNarrationProfile.rate(defaultRate: AVSpeechUtteranceDefaultSpeechRate)
             return utterance
         }
         do {

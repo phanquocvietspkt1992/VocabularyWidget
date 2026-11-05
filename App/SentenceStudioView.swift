@@ -23,6 +23,7 @@ private struct SentenceRecoveryDocument: FileDocument {
 struct SentenceStudioView: View {
     @StateObject private var model = SentenceLibraryModel()
     @StateObject private var historyModel = SentenceRoundHistoryModel()
+    @StateObject private var sessionModel = SentenceRoundSessionModel()
     @State private var editor: SentenceEditSession?
     @State private var exportingRecovery = false
     @State private var exportError: String?
@@ -52,7 +53,8 @@ struct SentenceStudioView: View {
                 }
                 ForEach(model.topics) { topic in
                     NavigationLink {
-                        SentenceTopicView(model: model, historyModel: historyModel, topicID: topic.id)
+                        SentenceTopicView(model: model, historyModel: historyModel,
+                                          sessionModel: sessionModel, topicID: topic.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(topic.name).font(.headline)
@@ -171,6 +173,7 @@ private struct SentenceTopicEditor: View {
 private struct SentenceTopicView: View {
     @ObservedObject var model: SentenceLibraryModel
     @ObservedObject var historyModel: SentenceRoundHistoryModel
+    @ObservedObject var sessionModel: SentenceRoundSessionModel
     let topicID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var mode = SentenceMode.stage
@@ -178,7 +181,9 @@ private struct SentenceTopicView: View {
     @State private var playSession: SentencePlaySession?
     @State private var error: String?
     @State private var deleting = false
+    @State private var replacingRound = false
     private var topic: SentenceTopic? { model.topics.first { $0.id == topicID } }
+    private var savedRound: SentenceSavedRound? { sessionModel.session(topicID: topicID, mode: mode) }
 
     var body: some View {
         List {
@@ -186,17 +191,42 @@ private struct SentenceTopicView: View {
                 Section {
                     Picker("Mode", selection: $mode) { ForEach(SentenceMode.allCases) { Text($0.rawValue).tag($0) } }
                         .pickerStyle(.segmented)
-                    Button {
-                        do { playSession = SentencePlaySession(round: try SentenceRound(topic: topic, mode: mode)) }
-                        catch { self.error = error.localizedDescription }
-                    } label: { Label("Play \(mode.rawValue)", systemImage: "play.fill") }
-                        .disabled(topic.pairs.count < 4 || model.error != nil)
+                    if let savedRound {
+                        Button {
+                            do {
+                                playSession = SentencePlaySession(round: try sessionModel.resume(topicID: topicID, mode: mode))
+                            } catch { self.error = error.localizedDescription }
+                        } label: {
+                            Label(savedRound.round.finished ? "View Results" : "Resume Round",
+                                  systemImage: savedRound.round.finished ? "flag.checkered" : "play.fill")
+                        }
+                        Text(savedRound.round.finished
+                             ? "Complete · \(savedRound.round.answers.filter(\.correct).count) / \(savedRound.round.questions.count) correct"
+                             : "Question \(savedRound.round.index + 1) of \(savedRound.round.questions.count) · \(savedRound.round.answers.count) answered")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        if !savedRound.round.finished {
+                            Button("New Game", systemImage: "arrow.counterclockwise") { replacingRound = true }
+                                .disabled(topic.pairs.count < 4 || model.error != nil)
+                        }
+                    } else {
+                        Button {
+                            do { playSession = SentencePlaySession(round: try sessionModel.start(topic: topic, mode: mode)) }
+                            catch { self.error = error.localizedDescription }
+                        } label: { Label("New Game", systemImage: "play.fill") }
+                            .disabled(topic.pairs.count < 4 || model.error != nil)
+                    }
                     if topic.pairs.count < 4 {
                         Text(SentenceGameError.tooSmall.localizedDescription).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red) } }
+                if let error = sessionModel.error {
+                    Section {
+                        Text(error).foregroundStyle(.red)
+                        Button("Reload Saved Rounds", systemImage: "arrow.clockwise") { sessionModel.reload() }
+                    }
+                }
                 ForEach(topic.pairs) { pair in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(pair.english).font(.headline)
@@ -218,12 +248,28 @@ private struct SentenceTopicView: View {
             }
         }
         .sheet(item: $editor) { SentenceTopicEditor(model: model, session: $0) }
-        .fullScreenCover(item: $playSession) { SentenceGameView(initialRound: $0.round, historyModel: historyModel) }
+        .fullScreenCover(item: $playSession) {
+            SentenceGameView(initialRound: $0.round, historyModel: historyModel, sessionModel: sessionModel)
+        }
         .confirmationDialog("Delete this sentence topic and all its pairs?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete Topic", role: .destructive) {
-                do { try model.delete(topicID, expected: model.topics); dismiss() }
+                do {
+                    try model.delete(topicID, expected: model.topics)
+                    try sessionModel.remove(topicID: topicID)
+                    dismiss()
+                }
                 catch { self.error = error.localizedDescription }
             }
+        }
+        .confirmationDialog("Replace this unfinished round?", isPresented: $replacingRound, titleVisibility: .visible) {
+            Button("Replace Round", role: .destructive) {
+                guard let topic else { return }
+                do { playSession = SentencePlaySession(round: try sessionModel.start(topic: topic, mode: mode)) }
+                catch { self.error = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The saved questions and answers for this topic and mode will be replaced.")
         }
     }
 }
@@ -273,6 +319,7 @@ private struct SentenceGameView: View {
     @StateObject private var audio = SentenceAudio()
     @StateObject private var revealController = SentenceRevealController()
     @ObservedObject private var historyModel: SentenceRoundHistoryModel
+    @ObservedObject private var sessionModel: SentenceRoundSessionModel
     @State private var round: SentenceRound
     @State private var exiting = false
     @State private var initialReadRequested = false
@@ -286,10 +333,12 @@ private struct SentenceGameView: View {
     private var revealing: Bool { revealController.isRevealing }
     private let amber = Color(red: 1, green: 0.74, blue: 0.28)
 
-    init(initialRound: SentenceRound, historyModel: SentenceRoundHistoryModel) {
+    init(initialRound: SentenceRound, historyModel: SentenceRoundHistoryModel,
+         sessionModel: SentenceRoundSessionModel) {
         _round = State(initialValue: initialRound)
         _audio = StateObject(wrappedValue: SentenceAudio(stage: initialRound.mode == .stage))
         _historyModel = ObservedObject(initialValue: historyModel)
+        _sessionModel = ObservedObject(initialValue: sessionModel)
     }
 
     var body: some View {
@@ -334,6 +383,11 @@ private struct SentenceGameView: View {
                             if let error = audio.error { Text(error).font(.footnote).foregroundStyle(coral) }
                             if let error = audio.narrationError { Text(error).font(.footnote).foregroundStyle(coral) }
                             if let error = historyModel.error { Text(error).font(.footnote).foregroundStyle(coral) }
+                            if historyModel.error != nil {
+                                Button("Retry History Save", systemImage: "arrow.clockwise") { historyModel.retryPending() }
+                                    .buttonStyle(.bordered)
+                            }
+                            if let error = sessionModel.error { Text(error).font(.footnote).foregroundStyle(coral) }
                         }
                         .padding(round.mode == .stage ? 12 : 16)
                         .frame(maxWidth: round.mode == .stage ? 960 : 700).frame(maxWidth: .infinity)
@@ -364,7 +418,6 @@ private struct SentenceGameView: View {
                         }
                         Toggle(isOn: $audio.effectsEnabled) { Label("Sound Effects", systemImage: "speaker.wave.2") }
                         Toggle(isOn: $audio.narratorEnabled) { Label("System Narrator", systemImage: "person.wave.2") }
-                        englishVoiceMenu
                         Button("Resume Audio", systemImage: "play.circle") {
                             if scenePhase == .active { audio.activate(stage: round.mode == .stage) }
                         }
@@ -380,6 +433,7 @@ private struct SentenceGameView: View {
                 Button("Exit Round", role: .destructive) { stop(); dismiss() }
             }
             .onAppear {
+                historyModel.reconcile(round)
                 if scenePhase == .active {
                     audio.activate(stage: round.mode == .stage)
                     if !initialReadRequested {
@@ -416,19 +470,6 @@ private struct SentenceGameView: View {
         .buttonStyle(.bordered)
     }
 
-    private var englishVoiceMenu: some View {
-        return Menu {
-            if audio.installedEnglishVoices.isEmpty { Text("No Installed English Voice") }
-            else {
-                Picker("English Voice", selection: $audio.englishVoiceID) {
-                    ForEach(audio.installedEnglishVoices) { voice in
-                        Text(voice.name).tag(voice.id)
-                    }
-                }
-            }
-        } label: { Label("English Voice", systemImage: "waveform") }
-    }
-
     @ViewBuilder
     private var primaryAction: some View {
         if round.finished {
@@ -440,7 +481,9 @@ private struct SentenceGameView: View {
             Button {
                 audio.stopNarration()
                 audio.stopEffect()
-                round.advance()
+                var candidate = round
+                candidate.advance()
+                guard persist(candidate) else { return }
                 if round.finished { audio.play(.finish) }
                 else { audio.readNewQuestion(round.current) }
             } label: {
@@ -494,13 +537,16 @@ private struct SentenceGameView: View {
             guard !revealing, scenePhase == .active else { return }
             audio.stopNarration()
             let letter = ["A", "B", "C", "D"][index]
-            if let answer = round.select(option.id) {
-                historyModel.append(answer, roundID: round.id, topic: round.topic, mode: round.mode,
-                                    questionIndex: round.index)
+            var candidate = round
+            if let answer = candidate.select(option.id) {
+                guard persist(candidate) else { return }
+                historyModel.recordCommitted(answer, roundID: candidate.id, topic: candidate.topic, mode: candidate.mode,
+                                             questionIndex: candidate.index)
                 audio.readQuickResult(letter: letter, english: option.english, correct: answer.correct) {
                     audio.play(answer.correct ? .correct : .incorrect)
                 }
             } else if round.mode == .stage {
+                guard persist(candidate) else { return }
                 if audio.narratorEnabled { audio.readStageSelection(letter: letter, english: option.english) }
                 else { audio.play(.select) }
             }
@@ -564,9 +610,11 @@ private struct SentenceGameView: View {
         let questionID = round.current?.id
         revealController.begin {
             guard scenePhase == .active, round.current?.id == questionID else { return }
-            if let answer = round.confirm() {
-                historyModel.append(answer, roundID: round.id, topic: round.topic, mode: round.mode,
-                                    questionIndex: round.index)
+            var candidate = round
+            if let answer = candidate.confirm() {
+                guard persist(candidate) else { return }
+                historyModel.recordCommitted(answer, roundID: candidate.id, topic: candidate.topic, mode: candidate.mode,
+                                             questionIndex: candidate.index)
                 audio.readResult(correct: answer.correct) {
                     audio.play(answer.correct ? .correct : .incorrect)
                 }
@@ -582,10 +630,26 @@ private struct SentenceGameView: View {
     private func restart(retry: Bool) {
         stop()
         do {
-            round = try SentenceRound(topic: round.topic, mode: round.mode, retryIDs: retry ? round.incorrectIDs : nil)
+            let candidate = try SentenceRound(topic: round.topic, mode: round.mode,
+                                              retryIDs: retry ? round.incorrectIDs : nil)
+            try sessionModel.save(candidate)
+            round = candidate
+            error = nil
             audio.activate(stage: round.mode == .stage)
             audio.readNewQuestion(round.current)
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func persist(_ candidate: SentenceRound) -> Bool {
+        do {
+            try sessionModel.save(candidate)
+            round = candidate
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
 }
 
