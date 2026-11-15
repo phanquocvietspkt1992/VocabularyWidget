@@ -12,6 +12,11 @@ private struct SentencePlaySession: Identifiable {
     let round: SentenceRound
 }
 
+private struct SentenceBuilderPlaySession: Identifiable {
+    let id = UUID()
+    let round: SentenceBuilderRound
+}
+
 private struct SentenceRecoveryDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }
     var bytes: Data
@@ -24,6 +29,7 @@ struct SentenceStudioView: View {
     @StateObject private var model = SentenceLibraryModel()
     @StateObject private var historyModel = SentenceRoundHistoryModel()
     @StateObject private var sessionModel = SentenceRoundSessionModel()
+    @StateObject private var builderSessionModel = SentenceBuilderSessionModel()
     @State private var editor: SentenceEditSession?
     @State private var exportingRecovery = false
     @State private var exportError: String?
@@ -37,6 +43,10 @@ struct SentenceStudioView: View {
                     } label: {
                         Label("Answer History", systemImage: "clock.arrow.circlepath")
                     }
+                    Button("Try Sample Sentences", systemImage: "text.badge.plus") {
+                        editor = SentenceEditSession(topic: SentenceTopic.sample(), expected: model.topics)
+                    }
+                    .disabled(!model.canEdit)
                 }
                 if let error = model.error {
                     Section {
@@ -54,7 +64,8 @@ struct SentenceStudioView: View {
                 ForEach(model.topics) { topic in
                     NavigationLink {
                         SentenceTopicView(model: model, historyModel: historyModel,
-                                          sessionModel: sessionModel, topicID: topic.id)
+                                          sessionModel: sessionModel, builderSessionModel: builderSessionModel,
+                                          topicID: topic.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(topic.name).font(.headline)
@@ -174,6 +185,7 @@ private struct SentenceTopicView: View {
     @ObservedObject var model: SentenceLibraryModel
     @ObservedObject var historyModel: SentenceRoundHistoryModel
     @ObservedObject var sessionModel: SentenceRoundSessionModel
+    @ObservedObject var builderSessionModel: SentenceBuilderSessionModel
     let topicID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var mode = SentenceMode.stage
@@ -182,16 +194,71 @@ private struct SentenceTopicView: View {
     @State private var error: String?
     @State private var deleting = false
     @State private var replacingRound = false
+    @State private var replacingBuilderRound = false
+    @State private var builderPlaySession: SentenceBuilderPlaySession?
     private var topic: SentenceTopic? { model.topics.first { $0.id == topicID } }
-    private var savedRound: SentenceSavedRound? { sessionModel.session(topicID: topicID, mode: mode) }
+    private var savedRound: SentenceSavedRound? {
+        mode == .builder ? nil : sessionModel.session(topicID: topicID, mode: mode)
+    }
+    private var savedBuilderRound: SentenceBuilderSavedRound? {
+        mode == .builder ? builderSessionModel.session(topicID: topicID) : nil
+    }
 
     var body: some View {
         List {
             if let topic {
                 Section {
-                    Picker("Mode", selection: $mode) { ForEach(SentenceMode.allCases) { Text($0.rawValue).tag($0) } }
+                    Picker("Mode", selection: $mode) {
+                        ForEach(SentenceMode.allCases) {
+                            Text($0.displayName).tag($0)
+                        }
+                    }
                         .pickerStyle(.segmented)
-                    if let savedRound {
+                    if mode == .builder {
+                        Text("Use imported English sentences with 2–20 words. Up to five eligible sentences are shuffled into a round.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Text("Tiles omit capitalization and punctuation. The answer must match the imported sentence; other valid wording is not accepted.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        let eligibleCount = SentenceBuilderRound.eligiblePairs(in: topic).count
+                        Text("\(eligibleCount) of \(topic.pairs.count) sentences eligible")
+                            .font(.footnote).foregroundStyle(eligibleCount == 0 ? Color.red : Color.secondary)
+                        if eligibleCount < topic.pairs.count {
+                            Text("\(topic.pairs.count - eligibleCount) sentence(s) skipped: English must contain 2–20 words with at least two distinct words.")
+                                .font(.footnote).foregroundStyle(.red)
+                        }
+                        if eligibleCount == 0 {
+                            Text("No suitable sentences; add an English sentence with 2–20 words and at least two distinct words to play Word Order.")
+                                .font(.footnote).foregroundStyle(.red)
+                        }
+                        if let savedBuilderRound {
+                            Button {
+                                do {
+                                    builderPlaySession = SentenceBuilderPlaySession(
+                                        round: try builderSessionModel.resume(topicID: topicID))
+                                } catch { self.error = error.localizedDescription }
+                            } label: {
+                                Label(savedBuilderRound.round.finished ? "View Word Order Results" : "Resume Word Order Round",
+                                      systemImage: savedBuilderRound.round.finished ? "flag.checkered" : "play.fill")
+                            }
+                            Text(savedBuilderRound.round.finished
+                                 ? "Complete · \(savedBuilderRound.round.score) stars"
+                                 : "Sentence \(savedBuilderRound.round.index + 1) of \(savedBuilderRound.round.questions.count)")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Button {
+                            if let savedBuilderRound, !savedBuilderRound.round.finished { replacingBuilderRound = true }
+                            else { startBuilderRound() }
+                        } label: {
+                            Label("New Word Order Round", systemImage: "play.fill")
+                        }
+                        .disabled(eligibleCount == 0 || model.error != nil || builderSessionModel.error != nil)
+                        if let error = builderSessionModel.error {
+                            Text(error).font(.footnote).foregroundStyle(.red)
+                            Button("Reload Word Order Rounds", systemImage: "arrow.clockwise") {
+                                builderSessionModel.reload()
+                            }
+                        }
+                    } else if let savedRound {
                         Button {
                             do {
                                 playSession = SentencePlaySession(round: try sessionModel.resume(topicID: topicID, mode: mode))
@@ -215,7 +282,7 @@ private struct SentenceTopicView: View {
                         } label: { Label("New Game", systemImage: "play.fill") }
                             .disabled(topic.pairs.count < 4 || model.error != nil)
                     }
-                    if topic.pairs.count < 4 {
+                    if mode != .builder && topic.pairs.count < 4 {
                         Text(SentenceGameError.tooSmall.localizedDescription).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
@@ -233,7 +300,11 @@ private struct SentenceTopicView: View {
                         Text(pair.vietnamese).foregroundStyle(.secondary)
                     }.padding(.vertical, 4)
                 }
-            } else { ContentUnavailableView("Topic Unavailable", systemImage: "text.bubble") }
+            } else {
+                ContentUnavailableView("Topic Unavailable", systemImage: "text.bubble")
+                if let error { Text(error).foregroundStyle(.red) }
+                if let error = builderSessionModel.error { Text(error).foregroundStyle(.red) }
+            }
         }
         .navigationTitle(topic?.name ?? "Sentence Topic")
         .toolbar {
@@ -251,11 +322,15 @@ private struct SentenceTopicView: View {
         .fullScreenCover(item: $playSession) {
             SentenceGameView(initialRound: $0.round, historyModel: historyModel, sessionModel: sessionModel)
         }
+        .fullScreenCover(item: $builderPlaySession) {
+            SentenceBuilderGameView(initialRound: $0.round, sessionModel: builderSessionModel)
+        }
         .confirmationDialog("Delete this sentence topic and all its pairs?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete Topic", role: .destructive) {
                 do {
                     try model.delete(topicID, expected: model.topics)
                     try sessionModel.remove(topicID: topicID)
+                    try builderSessionModel.remove(topicID: topicID)
                     dismiss()
                 }
                 catch { self.error = error.localizedDescription }
@@ -271,6 +346,22 @@ private struct SentenceTopicView: View {
         } message: {
             Text("The saved questions and answers for this topic and mode will be replaced.")
         }
+        .confirmationDialog("Replace this unfinished Word Order round?", isPresented: $replacingBuilderRound,
+                            titleVisibility: .visible) {
+            Button("Replace Round", role: .destructive) { startBuilderRound() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current tile arrangement and results for this topic will be replaced.")
+        }
+    }
+
+    private func startBuilderRound(retryIDs: Set<UUID>? = nil) {
+        guard let topic else { return }
+        do {
+            builderPlaySession = SentenceBuilderPlaySession(
+                round: try builderSessionModel.start(topic: topic, retryIDs: retryIDs))
+            error = nil
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -300,7 +391,7 @@ private struct SentenceRoundHistoryView: View {
                     }
                 } header: {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("\(record.topicName) · \(record.mode.rawValue)")
+                        Text("\(record.topicName) · \(record.mode.displayName)")
                         Text(record.answeredAt.formatted(date: .abbreviated, time: .shortened))
                     }
                 }
@@ -351,7 +442,7 @@ private struct SentenceGameView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                Text(round.mode.rawValue.uppercased()).font(.system(.caption, design: .rounded, weight: .bold))
+                                Text(round.mode.displayName.uppercased()).font(.system(.caption, design: .rounded, weight: .bold))
                                     .foregroundStyle(round.mode == .stage ? amber : Color.primary)
                                 Spacer()
                                 Text("\(round.score) / \(round.questions.count)").font(.headline.monospacedDigit())
@@ -644,6 +735,423 @@ private struct SentenceGameView: View {
         do {
             try sessionModel.save(candidate)
             round = candidate
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+}
+
+private struct SentenceBuilderGameView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var audio: SentenceAudio
+    @StateObject private var revealController = SentenceRevealController()
+    @ObservedObject private var sessionModel: SentenceBuilderSessionModel
+    @State private var round: SentenceBuilderRound
+    @State private var error: String?
+    @State private var checking = false
+    @State private var successFeedback = 0
+    @State private var moreExpanded = false
+
+    private let cream = Color(red: 1.00, green: 0.97, blue: 0.89)
+    private let mint = Color(red: 0.70, green: 0.89, blue: 0.79)
+    private let leaf = Color(red: 0.14, green: 0.37, blue: 0.28)
+    private let sky = Color(red: 0.56, green: 0.78, blue: 0.89)
+    private let peach = Color(red: 0.96, green: 0.66, blue: 0.51)
+    private let ink = Color(red: 0.16, green: 0.22, blue: 0.24)
+
+    init(initialRound: SentenceBuilderRound, sessionModel: SentenceBuilderSessionModel) {
+        _round = State(initialValue: initialRound)
+        _audio = StateObject(wrappedValue: SentenceAudio(stage: true, theme: .gentle))
+        _sessionModel = ObservedObject(initialValue: sessionModel)
+    }
+
+    private var question: SentenceBuilderQuestion? { round.current }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                cream.ignoresSafeArea()
+                GeometryReader { geometry in
+                    ViewThatFits(in: .vertical) {
+                        gameContent(width: geometry.size.width)
+                        ScrollView { gameContent(width: geometry.size.width) }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                primaryAction.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+                    .frame(maxWidth: 720).frame(maxWidth: .infinity)
+                    .background(.white.opacity(0.96))
+                    .overlay(alignment: .top) { Rectangle().fill(sky.opacity(0.55)).frame(height: 1) }
+                    .shadow(color: ink.opacity(0.08), radius: 10, x: 0, y: -3)
+            }
+            .foregroundStyle(ink)
+            .tint(leaf)
+            .navigationTitle(round.topic.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { revealController.cancel(); audio.stop(); dismiss() } label: {
+                        Label("Exit Word Order", systemImage: "xmark").labelStyle(.iconOnly)
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Toggle(isOn: $audio.musicEnabled) { Label("Music", systemImage: "music.note") }
+                        Toggle(isOn: $audio.effectsEnabled) { Label("Sound Effects", systemImage: "speaker.wave.2") }
+                        Toggle(isOn: $audio.narratorEnabled) { Label("System Narrator", systemImage: "person.wave.2") }
+                        Button("Resume Audio", systemImage: "play.circle") {
+                            if scenePhase == .active { audio.activate(stage: true) }
+                        }
+                    } label: {
+                        Label("Audio", systemImage: "speaker.wave.2.circle").labelStyle(.iconOnly)
+                    }
+                }
+            }
+            .preferredColorScheme(.light)
+            .transaction { transaction in
+                if reduceMotion || scenePhase != .active {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
+            .sensoryFeedback(.success, trigger: successFeedback)
+            .onAppear { if scenePhase == .active { audio.activate(stage: true) } }
+            .onDisappear { revealController.cancel(); audio.stop() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { revealController.cancel(); checking = false; audio.stop() }
+                else { audio.activate(stage: true) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func gameContent(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(round.index + 1)/\(round.questions.count)")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .accessibilityLabel("Sentence \(round.index + 1) of \(round.questions.count)")
+                Spacer()
+                Label("\(round.score)", systemImage: "star.fill")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .accessibilityLabel("\(round.score) stars")
+            }
+            if round.finished {
+                results
+            } else if let question {
+                Text(question.pair.vietnamese)
+                    .font(.system(.title2, design: .serif, weight: .semibold))
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 60).padding(12)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(checking ? peach : sky.opacity(0.8), lineWidth: 1))
+                    .shadow(color: ink.opacity(0.07), radius: 8, x: 0, y: 3)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Answer").font(.caption.weight(.bold)).foregroundStyle(ink.opacity(0.76))
+                arrangedTiles(question, availableWidth: width)
+                if question.finished {
+                    Label(question.viewed ? "Viewed · 0 stars"
+                          : question.isCorrect ? "Nice work · \(question.stars ?? 0) stars"
+                          : "Nice try · 0 stars",
+                          systemImage: question.viewed ? "eye.fill" : question.isCorrect ? "checkmark.seal.fill" : "heart.fill")
+                        .font(.headline).foregroundStyle(question.isCorrect ? leaf : ink)
+                        .symbolEffect(.bounce, value: successFeedback)
+                    Text(question.pair.english).font(.title3.weight(.semibold)).foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        guard scenePhase == .active else { return }
+                        revealController.cancel()
+                        audio.readSentence(question.pair.english, explicit: true)
+                    } label: {
+                        Label("Replay", systemImage: "speaker.wave.2").frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(scenePhase != .active)
+                } else {
+                    Text("Word bank").font(.caption.weight(.bold)).foregroundStyle(ink.opacity(0.76))
+                    bankTiles(question)
+                    DisclosureGroup("More", isExpanded: $moreExpanded) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Tap a bank word to append it. Drag before a word or to the end to move it; tap a selected word to return it.")
+                                .font(.footnote).foregroundStyle(ink.opacity(0.76))
+                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 8) {
+                                Button {
+                                    guard scenePhase == .active else { return }
+                                    var candidate = round
+                                    guard candidate.useHint() != nil else { return }
+                                    if persist(candidate) { audio.playWordOrder(.select) }
+                                } label: {
+                                    Label("Hint", systemImage: "lightbulb").frame(maxWidth: .infinity, minHeight: 44)
+                                }
+                                .disabled(question.finished || checking || question.hint == nil || scenePhase != .active)
+                                Button {
+                                    guard scenePhase == .active, !checking else { return }
+                                    var candidate = round
+                                    candidate.markHeard()
+                                    _ = persist(candidate) {
+                                        audio.readSentence(question.pair.english, explicit: true)
+                                    }
+                                } label: {
+                                    Label("Listen", systemImage: "speaker.wave.2").frame(maxWidth: .infinity, minHeight: 44)
+                                }
+                                .disabled(question.finished || checking || scenePhase != .active)
+                            }
+                            .buttonStyle(.bordered)
+                            Button {
+                                var candidate = round
+                                candidate.reveal()
+                                guard persist(candidate) else { return }
+                                audio.playWordOrder(.select)
+                            } label: {
+                                Label("Reveal", systemImage: "eye").frame(maxWidth: .infinity, minHeight: 44)
+                            }
+                            .buttonStyle(.bordered).tint(leaf)
+                            .disabled(checking || scenePhase != .active)
+                            if question.hintShown, let hint = question.hint {
+                                Label("Next word: \(hint)", systemImage: "lightbulb.fill")
+                                    .font(.headline).foregroundStyle(ink).padding(8)
+                                    .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                                    .accessibilityAddTraits(.updatesFrequently)
+                            }
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
+                if let error {
+                    Text(error).font(.footnote).fixedSize(horizontal: false, vertical: true)
+                        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(peach.opacity(0.28), in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityAddTraits(.isStaticText)
+                }
+                if let error = audio.error { Text(error).font(.footnote).fixedSize(horizontal: false, vertical: true) }
+                if let error = audio.narrationError { Text(error).font(.footnote).fixedSize(horizontal: false, vertical: true) }
+                if let error = sessionModel.error { Text(error).font(.footnote).fixedSize(horizontal: false, vertical: true) }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: 850).frame(maxWidth: .infinity)
+    }
+
+    private func arrangedTiles(_ question: SentenceBuilderQuestion, availableWidth: CGFloat) -> some View {
+        let columns = max(1, Int((max(0, availableWidth - 44) + 6) / 82))
+        let rows = (question.expectedWords.count + columns - 1) / columns
+        let reservedHeight = CGFloat(max(1, rows)) * 50 + (question.finished ? 20 : 68)
+        return ScrollView {
+        VStack(spacing: 8) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 6)], spacing: 6) {
+            ForEach(Array(question.arranged.enumerated()), id: \.element.id) { index, tile in
+                Button {
+                    guard !checking, scenePhase == .active else { return }
+                    if mutate({ $0.tapArranged(tile.id) }) { audio.playWordOrder(.select) }
+                } label: {
+                    tileLabel(tile.text, accent: mint)
+                }
+                .buttonStyle(.plain)
+                .draggable("arranged:\(tile.id.uuidString)")
+                .dropDestination(for: String.self) { values, _ in
+                    acceptDrop(values, before: tile.id)
+                }
+                .accessibilityLabel(tile.text)
+                .accessibilityHint("Double-tap to return this word to the bank. Drag before another word or to the end to reorder, or use the Move left and Move right accessibility actions.")
+                .accessibilityAction(named: Text("Move left")) {
+                    guard !checking, scenePhase == .active, index > 0 else { return }
+                    if mutate({ $0.moveArranged(from: index, to: index - 1) }) { audio.playWordOrder(.reorder) }
+                }
+                .accessibilityAction(named: Text("Move right")) {
+                    guard !checking, scenePhase == .active, index + 1 < question.arranged.count else { return }
+                    if mutate({ $0.moveArranged(from: index, to: index + 1) }) { audio.playWordOrder(.reorder) }
+                }
+                .disabled(question.finished || checking || scenePhase != .active)
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.78), value: question.arranged.map(\.id))
+        if !question.finished {
+            // A sibling target, not a parent destination: tile drops cannot route to append.
+            Text("Drop to end")
+                .font(.caption).foregroundStyle(ink.opacity(0.55))
+                .frame(maxWidth: .infinity, minHeight: 46, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { values, _ in
+                    acceptDrop(values)
+                }
+                .accessibilityLabel("End of your sentence")
+            }
+        }
+        .frame(minHeight: reservedHeight - 20, alignment: .top)
+        }
+        .padding(10)
+        .frame(height: reservedHeight, alignment: .top)
+        .background(.white.opacity(0.76), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(sky.opacity(0.65), lineWidth: 1))
+        .shadow(color: ink.opacity(0.06), radius: 8, x: 0, y: 3)
+        .accessibilityLabel("Your sentence, \(question.arranged.count) of \(question.expectedWords.count) words")
+    }
+
+    private func acceptDrop(_ values: [String], before target: UUID? = nil) -> Bool {
+        guard !checking, scenePhase == .active, values.count == 1, let payload = values.first else { return false }
+        let changed = mutate { $0.dropTile(payload, before: target) }
+        if changed { audio.playWordOrder(payload.hasPrefix("bank:") ? .select : .reorder) }
+        return changed
+    }
+
+    private func bankTiles(_ question: SentenceBuilderQuestion) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 6)], spacing: 6) {
+            ForEach(question.bankSlots) { tile in
+                let available = question.bank.contains(where: { $0.id == tile.id })
+                if available {
+                Button {
+                    guard !checking, scenePhase == .active else { return }
+                    if mutate({ $0.tapBank(tile.id) }) { audio.playWordOrder(.select) }
+                } label: {
+                    tileLabel(tile.text, accent: sky)
+                        .foregroundStyle(available ? ink : ink.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .draggable("bank:\(tile.id.uuidString)")
+                .accessibilityLabel("Add \(tile.text)")
+                .accessibilityHint("Double-tap to append, or drag before a selected word or to the end of your sentence.")
+                .disabled(question.finished || checking || scenePhase != .active)
+                } else {
+                    tileLabel(tile.text, accent: sky)
+                        .hidden()
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+    }
+
+    private func tileLabel(_ text: String, accent: Color) -> some View {
+        Text(text)
+            .font(.system(.body, design: .rounded, weight: .semibold))
+            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(accent.opacity(0.72), lineWidth: 1))
+            .shadow(color: ink.opacity(0.07), radius: 5, x: 0, y: 3)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var primaryAction: some View {
+        if round.finished {
+            Button { dismiss() } label: {
+                Label("Done", systemImage: "checkmark").frame(maxWidth: .infinity, minHeight: 48)
+            }.buttonStyle(.borderedProminent).tint(mint).foregroundStyle(ink)
+        } else if question?.finished == true {
+            Button {
+                revealController.cancel()
+                audio.stopNarration()
+                var candidate = round
+                candidate.advance()
+                guard persist(candidate) else { return }
+                moreExpanded = false
+                if candidate.finished { audio.playWordOrder(.finish) } else { audio.playWordOrder(.select) }
+            } label: {
+                Label(round.index + 1 == round.questions.count ? "Results" : "Next",
+                      systemImage: "arrow.right").frame(maxWidth: .infinity, minHeight: 48)
+            }.buttonStyle(.borderedProminent).tint(mint).foregroundStyle(ink)
+                .disabled(scenePhase != .active)
+        } else {
+            Button { beginCheck() } label: {
+                Label(checking ? "Checking..." : "Check", systemImage: checking ? "hourglass" : "checkmark")
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }.buttonStyle(.borderedProminent).tint(mint).foregroundStyle(ink)
+                .disabled(question?.arranged.count != question?.expectedWords.count || checking || scenePhase != .active)
+        }
+    }
+
+    private var results: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Nice practice!", systemImage: "star.leadinghalf.filled").font(.title2.weight(.bold)).foregroundStyle(ink)
+            Text("\(round.score) stars earned").font(.headline).foregroundStyle(leaf)
+            Button { replayNonThreeStarSentences() } label: {
+                Label("Replay non-3-star sentences", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent).tint(mint).foregroundStyle(ink)
+            .disabled(round.replayIDs.isEmpty || scenePhase != .active)
+            ForEach(round.questions) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label(item.viewed ? "Viewed" : "\(item.stars ?? 0) stars",
+                              systemImage: item.viewed ? "eye.fill" : "star.fill")
+                            .foregroundStyle(item.stars == 3 ? leaf : ink)
+                        Spacer()
+                        if item.stars != 3 { Text("Replay").font(.caption.weight(.bold)).foregroundStyle(leaf) }
+                    }
+                    Text(item.pair.vietnamese).font(.subheadline)
+                    Text(item.pair.english).font(.headline)
+                }
+                .padding(12)
+                .background(.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: ink.opacity(0.06), radius: 6, x: 0, y: 3)
+            }
+            if let error { Text(error).font(.footnote).foregroundStyle(ink) }
+            if let error = sessionModel.error { Text(error).font(.footnote).foregroundStyle(ink) }
+        }
+    }
+
+    private func beginCheck() {
+        guard let question, !question.finished, question.arranged.count == question.expectedWords.count,
+              !checking, scenePhase == .active else { return }
+        audio.stopNarration()
+        audio.playWordOrder(.check)
+        checking = true
+        let questionID = question.id
+        var candidate = round
+        let result = candidate.check()
+        checking = false
+        guard let result, persist(candidate, afterSave: {
+            revealController.begin(delay: 140_000_000) {
+                guard scenePhase == .active, round.current?.id == questionID,
+                      round.current?.finished == true else { return }
+                if result { successFeedback += 1; audio.playWordOrder(.correct) }
+                else { audio.playWordOrder(.incorrect) }
+                // This queued read is canceled by Next, replay, dismissal or backgrounding.
+                revealController.begin(delay: 500_000_000) {
+                    guard scenePhase == .active, round.current?.id == questionID,
+                          round.current?.finished == true else { return }
+                    audio.readSentence(question.pair.english)
+                }
+            }
+        }) else { return }
+    }
+
+    private func replayNonThreeStarSentences() {
+        revealController.cancel()
+        audio.stopNarration()
+        do {
+            let candidate = try sessionModel.start(topic: round.topic, retryIDs: round.replayIDs)
+            round = candidate
+            error = nil
+            audio.activate(stage: true)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    @discardableResult
+    private func mutate(_ change: (inout SentenceBuilderRound) -> Void) -> Bool {
+        var candidate = round
+        change(&candidate)
+        guard candidate != round else { return false }
+        return persist(candidate)
+    }
+
+    @discardableResult
+    private func persist(_ candidate: SentenceBuilderRound, afterSave: (() -> Void)? = nil) -> Bool {
+        do {
+            try sessionModel.save(candidate, afterSave: afterSave)
+            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.78)) {
+                round = candidate
+            }
             error = nil
             return true
         } catch {

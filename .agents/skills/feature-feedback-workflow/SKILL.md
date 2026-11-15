@@ -37,6 +37,8 @@ Coordinate the role agents in [`.github/agents/`](../../../.github/agents/). The
 
 Pass forward a compact packet, not the conversation transcript:
 
+The coordinator includes applicable [feedback rules](../../../AGENTS.md) in each packet, including protected modes, approved choices and rejected controls. For UI changes, BA performs a compact UX review before Dev (essential content, short labels, state transitions and measured-fit criteria); this is part of the existing sequence, not a claim that a separate UX/UI agent or skill has been created.
+
 For every run, preserve each role's concise audit record: input/handoff received, work performed and evidence checked, bugs/risks/blockers found (or explicitly not assessed), and the key handoff sent onward. The coordinator must pass the actual decision, evidence, unresolved issue, and any changed acceptance criterion to the next role. Do not imply direct agent-to-agent conversation beyond these coordinator-mediated packets.
 
 ```text
@@ -46,6 +48,7 @@ Acceptance criteria:
 Impact map (suspected / confirmed / ruled out, with evidence):
 Relevant paths and verified facts:
 Existing changes or constraints:
+UX review / protected modes / rejected approaches:
 Cheapest focused check:
 Model capability selected / availability:
 Unresolved risks:
@@ -69,6 +72,7 @@ For persistence mutations, assert exact rollback/readback behavior and actual ca
 - Keep full build logs outside the source tree. Classify the first actionable build failure as source, configuration, or environment; other tests do not turn a failed build into a pass.
 - Use short command output during exploration; retain full logs as files and cite the relevant lines/errors in handoffs.
 - Never call a deep-link dispatch, prompt, compile, or app launch an interaction pass unless the expected UI/result was actually observed.
+- For UI harness evidence, retain the harness, source hashes, exact commands and raw frame measurements with screenshots outside the repository. Compare the same seeded question across states and distinguish rendered fit from live gesture/audio checks.
 - If a required interface is unavailable, state the exact blocker and leave that criterion `UNVERIFIED`; do not simulate evidence.
 - Run a brief retrospective after QC. Add a reusable instruction only when a repeatable gap is demonstrated; do not encode one-off environment failures.
 

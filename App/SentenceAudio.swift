@@ -99,6 +99,101 @@ enum SentenceSound: CaseIterable {
     }
 }
 
+enum SentenceAudioTheme: Equatable {
+    case gameshow, gentle
+
+    static let defaultTheme: SentenceAudioTheme = .gameshow
+    var musicVolumeScale: Float { self == .gentle ? 0.42 : 1 }
+    var effectVolume: Float { self == .gentle ? 0.18 : 0.55 }
+}
+
+enum WordOrderSound: CaseIterable {
+    case music, select, reorder, check, correct, incorrect, finish
+
+    var notes: [Double] {
+        switch self {
+        case .music: return [523.25, 0, 392, 0, 440, 0, 349.23, 0, 392, 0, 523.25, 0, 440, 0, 392, 0]
+        case .select: return [659.25, 880]
+        case .reorder: return [196, 0]
+        case .check: return [698.46]
+        case .correct: return [523.25, 659.25, 783.99]
+        case .incorrect: return [392, 329.63]
+        case .finish: return [523.25, 659.25, 783.99, 1046.5]
+        }
+    }
+
+    var noteDuration: Double {
+        switch self {
+        case .music: return 0.42
+        case .select, .reorder: return 0.09
+        case .check: return 0.14
+        case .correct, .incorrect: return 0.13
+        case .finish: return 0.15
+        }
+    }
+
+    func wave() -> Data {
+        let rate = 22_050
+        let samplesPerNote = Int(Double(rate) * noteDuration)
+        let sampleCount = samplesPerNote * notes.count
+        var bytes = Data()
+        func append16(_ value: UInt16) {
+            bytes.append(UInt8(truncatingIfNeeded: value))
+            bytes.append(UInt8(truncatingIfNeeded: value >> 8))
+        }
+        func append32(_ value: UInt32) {
+            append16(UInt16(truncatingIfNeeded: value))
+            append16(UInt16(truncatingIfNeeded: value >> 16))
+        }
+        bytes.append(contentsOf: "RIFF".utf8)
+        append32(UInt32(36 + sampleCount * 2))
+        bytes.append(contentsOf: "WAVEfmt ".utf8)
+        append32(16)
+        append16(1)
+        append16(1)
+        append32(UInt32(rate))
+        append32(UInt32(rate * 2))
+        append16(2)
+        append16(16)
+        bytes.append(contentsOf: "data".utf8)
+        append32(UInt32(sampleCount * 2))
+
+        for (noteIndex, frequency) in notes.enumerated() {
+            for sample in 0..<samplesPerNote {
+                let position = noteIndex * samplesPerNote + sample
+                let time = Double(sample) / Double(rate)
+                let progress = Double(sample) / Double(samplesPerNote - 1)
+                let fadeInDuration = self == .music ? 0.04 : 0.012
+                let fadeOutDuration = self == .music ? 0.04 : 0.025
+                let fadeIn = Double(position) / Double(rate) / fadeInDuration
+                let fadeOut = Double(sampleCount - 1 - position) / Double(rate) / fadeOutDuration
+                let boundary = min(1.0, fadeIn, fadeOut)
+                let envelope = pow(sin(Double.pi * progress), 2)
+                let phase = 2 * Double.pi * frequency * time
+                let tone: Double
+                if frequency == 0 {
+                    tone = 0
+                } else {
+                    tone = sin(phase) * 0.62 + sin(phase * 2.71) * 0.20 + sin(phase * 4.13) * 0.08
+                }
+                let layer: Double
+                if self == .music {
+                    let chord = [[130.81, 164.81, 196.00], [146.83, 174.61, 220.00],
+                                 [116.54, 146.83, 174.61], [130.81, 164.81, 196.00]][(noteIndex / 4) % 4]
+                    let pad = chord.reduce(0) { $0 + sin(2 * Double.pi * $1 * Double(position) / Double(rate)) }
+                    layer = tone * envelope + 0.075 * pad
+                } else {
+                    layer = tone * envelope
+                }
+                let amplitude = layer * boundary * (self == .music ? 0.12 : 0.17)
+                let pcm = Int16(amplitude * Double(Int16.max))
+                append16(UInt16(bitPattern: pcm))
+            }
+        }
+        return bytes
+    }
+}
+
 struct SentenceSpeechLine: Equatable {
     let text: String
 
@@ -131,6 +226,7 @@ struct SentenceNarrationState {
     private(set) var speaking = false
 
     var shouldAutoRead: Bool { enabled }
+    func permitsRead(explicit: Bool) -> Bool { enabled || explicit }
 
     mutating func cancel() {
         generation = UUID()
@@ -198,8 +294,12 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     private var startup: Task<Void, Never>?
     private var retired: [UUID: AVSpeechSynthesizer] = [:]
     private let waves = Dictionary(uniqueKeysWithValues: SentenceSound.allCases.map { ($0, $0.wave()) })
+    private let wordOrderWaves = Dictionary(uniqueKeysWithValues: WordOrderSound.allCases.map { ($0, $0.wave()) })
+    private let theme: SentenceAudioTheme
+    private var musicVolume: Float { theme == .gentle ? policy.musicVolume * theme.musicVolumeScale : policy.musicVolume }
 
-    init(stage: Bool = false) {
+    init(stage: Bool = false, theme: SentenceAudioTheme = SentenceAudioTheme.defaultTheme) {
+        self.theme = theme
         narration = SentenceNarrationState()
         super.init()
         let center = NotificationCenter.default
@@ -253,15 +353,34 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         return try AVAudioPlayer(data: waves[sound]!)
     }
 
+    private func wordOrderPlayer(_ sound: WordOrderSound) throws -> AVAudioPlayer {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+        try session.setActive(true)
+        return try AVAudioPlayer(data: wordOrderWaves[sound]!)
+    }
+
     private func updateMusic() {
         guard policy.permitsMusic else { music?.stop(); music = nil; return }
-        guard music == nil else { music?.volume = policy.musicVolume; return }
+        guard music == nil else { music?.volume = musicVolume; return }
         do {
-            let player = try player(.music)
+            let player = try theme == .gentle ? wordOrderPlayer(.music) : player(.music)
             player.numberOfLoops = -1
-            player.volume = policy.musicVolume
+            player.volume = musicVolume
             guard player.play() else { throw SentenceAudioError.playback }
             music = player
+            error = nil
+        } catch { self.error = "Game audio unavailable: \(error.localizedDescription)" }
+    }
+
+    func playWordOrder(_ sound: WordOrderSound) {
+        guard theme == .gentle, policy.permitsEffects, sound != .music else { return }
+        effect?.stop()
+        do {
+            let player = try wordOrderPlayer(sound)
+            player.volume = theme.effectVolume
+            guard player.play() else { throw SentenceAudioError.playback }
+            effect = player
             error = nil
         } catch { self.error = "Game audio unavailable: \(error.localizedDescription)" }
     }
@@ -285,6 +404,10 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if narration.shouldAutoRead, let question { listen(question) }
     }
 
+    func readSentence(_ sentence: String, explicit: Bool = false) {
+        speak([SentenceSpeechLine(text: sentence)], explicit: explicit)
+    }
+
     func listen(_ question: SentenceQuestion) {
         speak(SentenceSpeechLine.plan(for: question))
     }
@@ -301,9 +424,9 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         speak([SentenceSpeechLine.result(correct: correct)], completion: completion)
     }
 
-    private func speak(_ plan: [SentenceSpeechLine], completion: (() -> Void)? = nil) {
+    private func speak(_ plan: [SentenceSpeechLine], explicit: Bool = false, completion: (() -> Void)? = nil) {
         stopNarration()
-        guard narratorEnabled else { completion?(); return }
+        guard narration.permitsRead(explicit: explicit) else { completion?(); return }
         guard policy.permitsNarration else {
             narrationError = "Narrator unavailable: resume audio while the app is active."
             completion?()
@@ -334,7 +457,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         utterances = reading
         speechCompletion = completion
         policy.narrating = true
-        music?.volume = policy.musicVolume
+        music?.volume = musicVolume
         startup = Task { @MainActor [weak self] in
             do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
             guard let self, self.narration.generation == token, self.narration.pending, !self.narration.speaking else { return }
@@ -354,7 +477,7 @@ final class SentenceAudio: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         utterances = []
         speechCompletion = nil
         policy.narrating = false
-        music?.volume = policy.musicVolume
+        music?.volume = musicVolume
         if let old {
             let retirement = UUID()
             retired[retirement] = old

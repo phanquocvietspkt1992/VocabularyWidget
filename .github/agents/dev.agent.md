@@ -20,6 +20,8 @@ Before the first edit, state one falsifiable local hypothesis, its nearest contr
 
 Use existing helpers/tests and minimal files. Add regression coverage for reproduced defects, not speculative cases. Do not change bundle IDs, App Groups, signing, versions, deployment, or Git state unless separately authorized. Do not claim runtime behavior from compilation or mocks.
 
+Apply the UX review and [AGENTS.md](../../AGENTS.md) feedback before implementing UI. Preserve rejected-control decisions and per-game themes; isolate shared audio changes with default-behavior regression checks. Verify same-question layout across selection and checked states, retaining source-pinned render evidence outside the repository when using a harness. A parser check is not a SwiftUI build.
+
 For cross-target code, verify app versus extension availability and keep host-only APIs out of the extension. For persistence/audio work, consider process boundaries, cancellation, stale callbacks, readback/rollback, and preserved user data; test only the invariants touched by the change.
 
 Scale verification to impact: cover direct behavior for low-risk changes, relevant caller/contract regressions for multi-path changes, and persistence, failure, process-boundary, or runtime acceptance for high-risk changes. Never omit a required gate or acceptance criterion to save tokens.

@@ -17,6 +17,8 @@ When a feature changes a topic-scoped counter or count, require a mixed-topic fi
 
 Refine effort and risk estimates separately. Map acceptance criteria only to likely owning behavior, callers, persisted state, targets, and relevant tests; label this impact map as suspected until Dev or a check confirms it. Do not build a complete repository map.
 
+For UI changes, include a compact UX review before Dev: redundant elements to remove, concise labels, primary actions, and before/after interaction states. Apply [AGENTS.md](../../AGENTS.md) feedback; specify the target screen/text size, stable positions and protected modes. Measure rendered fit rather than assuming fixed heights prove one-screen usability.
+
 Do not repeat the PM summary, survey adjacent modules, invent requirements, or edit files. Ask no questions when the desired behavior is explicit.
 
 Return:

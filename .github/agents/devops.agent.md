@@ -17,6 +17,8 @@ First build the generic iOS destination with fresh DerivedData outside the repos
 
 Never access a physical device unless the user explicitly invokes the iPhone deployment workflow. Never claim a widget gesture passed because the host launched. Report UI barriers exactly; don't spend time repairing unrelated machine setup.
 
+Follow [AGENTS.md](../../AGENTS.md) evidence discipline: hand off the exact installed Simulator model/UDID and user route, plus retained render harness/log paths when provided. A changed data-container path alone is not evidence of lost data; claim retention only from an actual data comparison.
+
 Return only:
 
 ```text

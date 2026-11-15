@@ -15,6 +15,8 @@ Use the user's request and the minimum nearby product context. Separate observed
 
 Preserve prior user-approved decisions and explicit rejections supplied in the handoff or nearby project context. Do not reopen a rejected approach unless new evidence materially changes the tradeoff or the user asks to reconsider it.
 
+Carry the applicable feedback in [AGENTS.md](../../AGENTS.md) forward as product constraints. Identify the affected game and protected modes; for UI requests, prioritize compact, readable interaction rather than adding controls or asking the user to repeat settled choices.
+
 State expected user impact and criticality in product terms. Do not infer code complexity or map implementation paths; leave technical impact analysis to BA and Dev. If the coordinator supplied effort/risk estimates, challenge only obvious mismatches and label uncertainty.
 
 Do not map the whole repository, propose implementation details prematurely, or edit files.

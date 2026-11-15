@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @main
 struct SentenceGameChecks {
@@ -6,6 +7,16 @@ struct SentenceGameChecks {
     static func check(_ value: Bool, _ message: String) {
         precondition(value, message)
         count += 1
+    }
+    static func pcmSamples(_ bytes: Data) -> [Double] {
+        stride(from: 44, to: bytes.count, by: 2).map {
+            let value = Int16(bitPattern: UInt16(bytes[$0]) | (UInt16(bytes[$0 + 1]) << 8))
+            return Double(value) / Double(Int16.max)
+        }
+    }
+    static func waveformRMS(_ bytes: Data) -> Double {
+        let samples = pcmSamples(bytes)
+        return sqrt(samples.reduce(0) { $0 + $1 * $1 } / Double(samples.count))
     }
     static func rejects(_ message: String, expected: SentenceGameError? = nil, _ action: () throws -> Void) {
         do { try action(); fatalError(message) } catch {
@@ -29,7 +40,70 @@ struct SentenceGameChecks {
         })
     }
     @MainActor
+    static func checkSamples() throws {
+        let suiteName = "SentenceSampleChecks.\(UUID())"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let repository = SentenceRepository(defaults: suite)
+        let model = SentenceLibraryModel(repository: repository)
+        let original = topic("Existing")
+        try model.upsert(original, expected: [])
+        let stage = try SentenceRound(topic: original, mode: .stage)
+        _ = try SentenceRoundSessionRepository(defaults: suite).save(stage)
+        _ = try SentenceBuilderSessionRepository(defaults: suite).save(SentenceBuilderRound(topic: original))
+        let question = stage.questions[0]
+        _ = try SentenceRoundHistoryRepository(defaults: suite).append(SentenceRoundHistoryRecord(
+            roundID: stage.id, topic: original, mode: .stage, answeredAt: Date(timeIntervalSince1970: 1234),
+            question: question, selectedID: question.pair.id, questionIndex: 0
+        ))
+        suite.set("untouched", forKey: "selectedTopic")
+        let beforeOpening = suite.dictionaryRepresentation() as NSDictionary
+        var draft = SentenceTopic.sample()
+        let anotherDraft = SentenceTopic.sample()
+        let topicsAfterOpening = try repository.load()
+        check(suite.dictionaryRepresentation() as NSDictionary == beforeOpening
+            && topicsAfterOpening == [original], "opening/canceling sample drafts makes no writes")
+        check(try draft.validated() == draft && draft.pairs.count == 8, "sample has eight valid pairs")
+        check(Set(draft.pairs.map(\.id)).count == 8 && draft.id != anotherDraft.id
+            && Set(draft.pairs.map(\.id)).isDisjoint(with: anotherDraft.pairs.map(\.id)),
+            "each sample invocation has fresh topic and pair IDs")
+        let lengths = draft.pairs.map { SentenceBuilderRound.words(in: $0.english).count }
+        check(lengths.min() == 2 && lengths.max() == 12 && Set(lengths).count == 8,
+              "samples span varied two through twelve word sentences")
+        check(draft.pairs.contains {
+            let words = SentenceBuilderRound.words(in: $0.english)
+            return Set(words).count < words.count
+        }, "sample includes repeated words for independent Builder tiles")
+        check(SentenceBuilderRound.eligiblePairs(in: draft) == draft.pairs,
+              "all eight samples are Builder eligible")
+        check(try SentenceBuilderRound(topic: draft).questions.count == 5,
+              "samples start a capped Builder round")
+        check(try SentenceRound(topic: draft, mode: .stage).questions.count == 8,
+              "samples support the original Stage round")
+        check(try SentenceRound(topic: draft, mode: .quick).questions.count == 5,
+              "samples support the original Quick round")
+        let protectedKeys = [SentenceRoundSessionRepository.key, SentenceBuilderSessionRepository.key,
+                             SentenceRoundHistoryRepository.key]
+        let protectedBytes = protectedKeys.map { suite.data(forKey: $0) }
+        try model.upsert(draft, expected: model.topics)
+        check(try repository.load() == [original, draft], "explicit sample save preserves existing topic")
+        rejects("unchanged sample name requires explicit rename", expected: .duplicateTopic) {
+            try model.upsert(anotherDraft, expected: model.topics)
+        }
+        check(model.topics == [original, draft], "rejected sample save preserves effective library")
+        draft.name = "Edited Sample Sentences"
+        draft.pairs[0].english = "Please wait here."
+        try model.upsert(draft, expected: model.topics)
+        try model.upsert(anotherDraft, expected: model.topics)
+        check(try repository.load() == [original, draft, anotherDraft],
+              "repeated sample save appends without overwriting edited sample")
+        check(protectedKeys.map { suite.data(forKey: $0) } == protectedBytes
+            && suite.string(forKey: "selectedTopic") == "untouched",
+              "sample saves preserve Stage/Quick and Builder sessions, history and unrelated defaults")
+    }
+    @MainActor
     static func main() throws {
+        try checkSamples()
         let suiteName = "SentenceGameChecks.\(UUID())"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
@@ -167,6 +241,306 @@ struct SentenceGameChecks {
         check(remainingSessions.map(\.id) == [completedSaved.id]
             && removedStage == nil && removedQuick == nil,
             "topic removal clears its saved modes and preserves other topics")
+        let repeatedWordsTopic = SentenceTopic(name: "Builder duplicates", pairs: [
+            SentencePair(english: "We go, go home.", vietnamese: "Chúng ta về nhà.")
+        ])
+        var builderGenerator = SeededGenerator(seed: 301)
+        var duplicateBuilder = try SentenceBuilderRound(topic: repeatedWordsTopic, using: &builderGenerator)
+        let duplicateQuestion = duplicateBuilder.current!
+        var dragBuilder = duplicateBuilder
+        let dragIDs = duplicateQuestion.tiles.map(\.id)
+        let dragSlots = duplicateQuestion.bankSlots
+        func bankPayload(_ index: Int) -> String { "bank:\(dragIDs[index].uuidString)" }
+        func answerPayload(_ index: Int) -> String { "arranged:\(dragIDs[index].uuidString)" }
+        check(dragBuilder.dropTile(bankPayload(0)), "bank drag inserts into empty answer")
+        check(dragBuilder.dropTile(bankPayload(3)), "bank end drop appends")
+        check(dragBuilder.dropTile(bankPayload(1), before: dragIDs[0]),
+              "bank drag inserts before first selected tile")
+        check(dragBuilder.dropTile(bankPayload(2), before: dragIDs[3])
+            && dragBuilder.current!.arranged.map(\.id) == [dragIDs[1], dragIDs[0], dragIDs[2], dragIDs[3]],
+            "bank middle insertion preserves independent duplicate UUIDs")
+        check(dragBuilder.dropTile(answerPayload(1), before: dragIDs[2])
+            && dragBuilder.current!.arranged.map(\.id) == [dragIDs[0], dragIDs[1], dragIDs[2], dragIDs[3]],
+            "forward drag inserts BEFORE target after removal, not after target")
+        check(dragBuilder.dropTile(answerPayload(3), before: dragIDs[0])
+            && dragBuilder.current!.arranged.map(\.id) == [dragIDs[3], dragIDs[0], dragIDs[1], dragIDs[2]],
+            "backward drag inserts before first")
+        check(dragBuilder.dropTile(answerPayload(3))
+            && dragBuilder.current!.arranged.map(\.id) == dragIDs
+            && dragBuilder.current!.bankSlots == dragSlots,
+            "explicit end reorder preserves UUIDs and fixed bank slots")
+        let beforeInvalidDrag = dragBuilder
+        for (payload, target) in [
+            (answerPayload(0), Optional(dragIDs[0])),
+            (answerPayload(0), Optional(dragIDs[1])),
+            (answerPayload(3), nil),
+            (bankPayload(0), nil),
+            ("arranged:\(UUID().uuidString)", nil),
+            ("unknown:\(dragIDs[0].uuidString)", nil),
+            ("invalid", nil),
+            (answerPayload(0), Optional(UUID()))
+        ] {
+            check(!dragBuilder.dropTile(payload, before: target) && dragBuilder == beforeInvalidDrag,
+                  "self/no-op/invalid/stale-origin drops decline without mutation")
+        }
+        dragBuilder.tapArranged(dragIDs[2])
+        check(!dragBuilder.dropTile(answerPayload(2)), "returned tile rejects stale arranged origin")
+        check(dragBuilder.dropTile(bankPayload(2)) && dragBuilder.current!.bankSlots == dragSlots,
+              "bank drop at end preserves slots after return")
+        dragBuilder.reveal()
+        let finalizedDrag = dragBuilder
+        check(!dragBuilder.dropTile(answerPayload(0), before: dragIDs[3])
+            && !dragBuilder.dropTile(bankPayload(0)) && dragBuilder == finalizedDrag,
+            "finalized question declines drag mutations")
+        check(duplicateQuestion.expectedWords == ["we", "go", "go", "home"]
+            && duplicateQuestion.tiles.filter { $0.text == "go" }.count == 2
+            && Set(duplicateQuestion.tiles.filter { $0.text == "go" }.map(\.id)).count == 2,
+            "Builder strips case and punctuation while preserving independent duplicate tiles")
+        check(duplicateQuestion.bank.count == 4 && duplicateQuestion.arranged.isEmpty,
+            "Builder begins with an empty answer and shuffled tile bank")
+        let shuffleTopic = SentenceTopic(name: "Builder scramble invariant", pairs: [
+            SentencePair(english: "Open window.", vietnamese: "Mở cửa sổ."),
+            SentencePair(english: "We go, go home.", vietnamese: "Chúng ta về nhà."),
+            SentencePair(english: "Café cafe open.", vietnamese: "Quán mở.")
+        ])
+        for seed in 0..<100 {
+            var generator = SeededGenerator(seed: UInt64(seed))
+            let round = try SentenceBuilderRound(topic: shuffleTopic, using: &generator)
+            for question in round.questions {
+                check(question.bank.map { SentenceBuilderRound.normalizedWord($0.text) }
+                    != question.expectedWords.map(SentenceBuilderRound.normalizedWord),
+                    "Builder bank is not the normalized answer for seed \(seed)")
+                check(Set(question.bank.map(\.id)) == Set(question.tiles.map(\.id)),
+                    "Builder shuffle preserves every independent tile for seed \(seed)")
+            }
+        }
+        let indistinguishableTopic = SentenceTopic(name: "Builder identical words", pairs: [
+            SentencePair(english: "Go go!", vietnamese: "Đi đi!"),
+            SentencePair(english: "Café cafe.", vietnamese: "Quán cà phê.")
+        ])
+        check(SentenceBuilderRound.eligiblePairs(in: indistinguishableTopic).isEmpty,
+            "Builder excludes sentences that cannot be visibly scrambled under answer normalization")
+        for tile in duplicateQuestion.tiles { duplicateBuilder.tapBank(tile.id) }
+        let duplicateIDs = duplicateBuilder.current!.arranged.filter { $0.text == "go" }.map(\.id)
+        duplicateBuilder.moveArranged(from: 2, to: 1)
+        check(duplicateBuilder.current!.arranged.map(\.text) == ["we", "go", "go", "home"]
+            && duplicateIDs != duplicateBuilder.current!.arranged.filter { $0.text == "go" }.map(\.id)
+            && duplicateBuilder.check() == true && duplicateBuilder.current?.stars == 3,
+            "Builder judges normalized words rather than duplicate tile identity or punctuation")
+        let twentyOneWords = (0..<21).map { "word\($0)" }.joined(separator: " ")
+        let boundaryTopic = SentenceTopic(name: "Builder eligibility", pairs: [
+            SentencePair(english: "One", vietnamese: "Một"),
+            SentencePair(english: "Just enough", vietnamese: "Vừa đủ"),
+            SentencePair(english: twentyOneWords, vietnamese: "Quá dài"),
+            SentencePair(english: (0..<20).map { "word\($0)" }.joined(separator: " "),
+                         vietnamese: "Đủ hai mươi từ"),
+            SentencePair(english: "An eligible one", vietnamese: "Một câu hợp lệ"),
+            SentencePair(english: "Another eligible two", vietnamese: "Câu hợp lệ khác"),
+            SentencePair(english: "Third eligible three", vietnamese: "Câu hợp lệ thứ ba"),
+            SentencePair(english: "Fourth eligible four", vietnamese: "Câu hợp lệ thứ tư"),
+            SentencePair(english: "Fifth eligible five", vietnamese: "Câu hợp lệ thứ năm"),
+            SentencePair(english: "Sixth eligible six", vietnamese: "Câu hợp lệ thứ sáu")
+        ])
+        check(SentenceBuilderRound.eligiblePairs(in: boundaryTopic).count == 8,
+            "Builder accepts inclusive 2–20 word range and excludes unsuitable imported sentences")
+        let cappedBuilder = try SentenceBuilderRound(topic: boundaryTopic)
+        check(cappedBuilder.questions.count == 5 && cappedBuilder.current?.arranged.isEmpty == true,
+            "Builder shuffles no more than five eligible sentences with no pre-solved answer")
+        let accentedTopic = SentenceTopic(name: "Builder normalized accents", pairs: [
+            SentencePair(english: "The café is open.", vietnamese: "Quán cà phê đang mở.")
+        ])
+        var accentedBuilder = try SentenceBuilderRound(topic: accentedTopic)
+        for tile in accentedBuilder.current!.tiles { accentedBuilder.tapBank(tile.id) }
+        check(accentedBuilder.check() == true && accentedBuilder.current?.stars == 3,
+            "Builder compares diacritic-normalized text consistently")
+        var twoPairBuilder = try SentenceBuilderRound(topic: topic("Two-pair Builder", count: 2))
+        check(twoPairBuilder.questions.count == 2, "two-pair fixture starts a Builder round")
+        let originalQuestion = twoPairBuilder.current!
+        for tile in originalQuestion.tiles.reversed() { twoPairBuilder.tapBank(tile.id) }
+        check(twoPairBuilder.check() == false
+            && twoPairBuilder.current?.checks == 1
+            && twoPairBuilder.current?.arranged.map(\.text) == originalQuestion.tiles.reversed().map(\.text),
+            "Check retains an incorrect arrangement for comparison")
+        check(twoPairBuilder.current?.stars == 0 && twoPairBuilder.current?.viewed == false,
+            "wrong Check finalizes zero stars without marking viewed")
+        let finalizedWrong = twoPairBuilder
+        for tile in twoPairBuilder.current!.arranged { twoPairBuilder.tapArranged(tile.id) }
+        for tile in originalQuestion.tiles { twoPairBuilder.tapBank(tile.id) }
+        twoPairBuilder.moveArranged(from: 0, to: 1)
+        twoPairBuilder.markHeard()
+        _ = twoPairBuilder.useHint()
+        twoPairBuilder.reveal()
+        check(twoPairBuilder.check() == nil && twoPairBuilder == finalizedWrong,
+            "wrong finalization disables correction, assistance, reveal and repeated Check")
+        let fixedBank = originalQuestion.bankSlots
+        var slotsBuilder = try SentenceBuilderRound(topic: twoPairBuilder.topic)
+        let slots = slotsBuilder.current!.bankSlots
+        for tile in slots {
+            slotsBuilder.tapBank(tile.id)
+            check(slotsBuilder.current?.bankSlots == slots, "selection preserves every original bank slot")
+        }
+        for tile in slots.reversed() {
+            slotsBuilder.tapArranged(tile.id)
+            check(slotsBuilder.current?.bankSlots == slots, "return preserves every original bank slot")
+        }
+        check(slotsBuilder.current?.bank == slots && twoPairBuilder.current?.bankSlots == fixedBank,
+            "returned bank restores original shuffled order")
+        let assistedTopic = SentenceTopic(name: "Builder hint", pairs: [
+            SentencePair(english: "Open the window.", vietnamese: "Mở cửa sổ.")
+        ])
+        var hintedBuilder = try SentenceBuilderRound(topic: assistedTopic)
+        let hintedQuestion = hintedBuilder.current!
+        check(hintedBuilder.useHint() == "open", "Builder hint reveals only the next word")
+        for tile in hintedQuestion.tiles { hintedBuilder.tapBank(tile.id) }
+        check(hintedBuilder.check() == true && hintedBuilder.current?.stars == 1,
+            "hint-assisted correct answer earns one star")
+        let finalizedCorrect = hintedBuilder
+        hintedBuilder.tapArranged(hintedQuestion.tiles[0].id)
+        hintedBuilder.moveArranged(from: 0, to: 1)
+        hintedBuilder.markHeard()
+        hintedBuilder.reveal()
+        check(hintedBuilder.check() == nil && hintedBuilder == finalizedCorrect,
+            "correct finalization is one-shot and immutable")
+        var heardBuilder = try SentenceBuilderRound(topic: assistedTopic)
+        let heardQuestion = heardBuilder.current!
+        heardBuilder.markHeard()
+        for tile in heardQuestion.tiles { heardBuilder.tapBank(tile.id) }
+        check(heardBuilder.check() == true && heardBuilder.current?.stars == 1,
+            "hearing the full sentence marks a one-star assisted answer")
+        var viewedBuilder = try SentenceBuilderRound(topic: assistedTopic)
+        viewedBuilder.reveal()
+        check(viewedBuilder.current?.viewed == true && viewedBuilder.current?.stars == 0
+            && viewedBuilder.replayIDs == [assistedTopic.pairs[0].id],
+            "revealed sentence is marked viewed, scores zero and remains replayable")
+        let builderStore = SentenceBuilderSessionRepository(defaults: suite)
+        let topicBytesBeforeBuilder = suite.data(forKey: SentenceRepository.key)
+        let historyBytesBeforeBuilder = suite.data(forKey: SentenceRoundHistoryRepository.key)
+        let stageBytesBeforeBuilder = suite.data(forKey: SentenceRoundSessionRepository.key)
+        _ = try builderStore.save(twoPairBuilder, savedAt: Date(timeIntervalSince1970: 1250))
+        let restoredBuilder = try builderStore.load(topicID: twoPairBuilder.topic.id)!.round
+        check(restoredBuilder == twoPairBuilder, "Builder bank, arrangement, attempts and score restore exactly")
+        var legacyBuilder = try SentenceBuilderRound(topic: assistedTopic)
+        legacyBuilder.questions[0].originalBank = nil
+        for tile in legacyBuilder.current!.tiles { legacyBuilder.tapBank(tile.id) }
+        legacyBuilder.questions[0].originalBank = nil
+        legacyBuilder.questions[0].checks = 2
+        legacyBuilder.questions[0].stars = 2
+        let legacyDefaults = UserDefaults(suiteName: suiteName + ".legacy")!
+        defer { legacyDefaults.removePersistentDomain(forName: suiteName + ".legacy") }
+        let legacyStore = SentenceBuilderSessionRepository(defaults: legacyDefaults)
+        _ = try legacyStore.save(legacyBuilder)
+        check(try legacyStore.load(topicID: assistedTopic.id)?.round == legacyBuilder,
+            "legacy two-star archive and absent original bank load exactly")
+        legacyBuilder.questions[0].stars = nil
+        legacyBuilder.questions[0].checks = 4
+        _ = try legacyStore.save(legacyBuilder)
+        var pendingLegacy = try legacyStore.load(topicID: assistedTopic.id)!.round
+        check(pendingLegacy.check() == true && pendingLegacy.current?.stars == 3
+            && pendingLegacy.current?.checks == 5,
+            "legacy pending retry counts are retained but new final score ignores retries")
+        _ = try legacyStore.save(pendingLegacy)
+        legacyBuilder.questions[0].checks = 0
+        legacyBuilder.questions[0].originalBank = nil
+        let returnedLegacyTile = legacyBuilder.questions[0].arranged.removeLast()
+        legacyBuilder.questions[0].bank = [returnedLegacyTile]
+        _ = try legacyStore.save(legacyBuilder)
+        var partialLegacy = try legacyStore.load(topicID: assistedTopic.id)!.round
+        let legacySlots = partialLegacy.current!.bankSlots
+        partialLegacy.moveArranged(from: 0, to: 1)
+        partialLegacy.tapArranged(partialLegacy.current!.arranged[0].id)
+        check(partialLegacy.current?.bankSlots == legacySlots,
+            "legacy partial bank restores and captures stable slots before reordering or return")
+        check(suite.data(forKey: SentenceRepository.key) == topicBytesBeforeBuilder
+            && suite.data(forKey: SentenceRoundHistoryRepository.key) == historyBytesBeforeBuilder
+            && suite.data(forKey: SentenceRoundSessionRepository.key) == stageBytesBeforeBuilder,
+            "Builder persistence remains separate from topics, answer history and Stage/Quick rounds")
+        let builderBytes = suite.data(forKey: SentenceBuilderSessionRepository.key)!
+        var builderWrites = 0
+        let rejectedBuilderStore = SentenceBuilderSessionRepository(defaults: suite, writer: { bytes in
+            builderWrites += 1
+            if builderWrites == 1 { throw SentenceGameError.builderSessionWriteFailed }
+            if let bytes { suite.set(bytes, forKey: SentenceBuilderSessionRepository.key) }
+            else { suite.removeObject(forKey: SentenceBuilderSessionRepository.key) }
+        })
+        rejects("Builder write rollback", expected: .builderSessionWriteFailed) {
+            try rejectedBuilderStore.save(hintedBuilder)
+        }
+        check(try rejectedBuilderStore.loadAll().map(\.round) == [twoPairBuilder]
+            && suite.data(forKey: SentenceBuilderSessionRepository.key) == builderBytes,
+            "rejected Builder write restores prior bytes and effective session")
+        var callerBuilderWrites = 0
+        let callerBuilderStore = SentenceBuilderSessionRepository(defaults: suite, writer: { bytes in
+            callerBuilderWrites += 1
+            if callerBuilderWrites == 1 { throw SentenceGameError.builderSessionWriteFailed }
+            if let bytes { suite.set(bytes, forKey: SentenceBuilderSessionRepository.key) }
+            else { suite.removeObject(forKey: SentenceBuilderSessionRepository.key) }
+        })
+        let callerBuilderModel = SentenceBuilderSessionModel(repository: callerBuilderStore)
+        var rejectedNarration = SentenceNarrationState()
+        var narrationSideEffects = 0
+        rejects("Builder caller reports rejected write", expected: .builderSessionWriteFailed) {
+            try callerBuilderModel.save(hintedBuilder) {
+                DispatchQueue.main.async {
+                    narrationSideEffects += 1
+                    _ = rejectedNarration.begin()
+                }
+            }
+        }
+        var rejectedQueueDrained = false
+        DispatchQueue.main.async { rejectedQueueDrained = true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        check(rejectedQueueDrained && narrationSideEffects == 0 && !rejectedNarration.pending,
+            "rejected save cannot queue narration; main queue actually drained")
+        check(callerBuilderModel.sessions.map(\.round) == [twoPairBuilder]
+            && callerBuilderModel.error?.contains("could not be saved") == true
+            && suite.data(forKey: SentenceBuilderSessionRepository.key) == builderBytes,
+            "Builder caller retains effective UI session and surfaces rejected save")
+        try callerBuilderModel.save(hintedBuilder) { narrationSideEffects += 1 }
+        check(narrationSideEffects == 1, "successful verified save permits exactly one post-save effect")
+        check(callerBuilderModel.sessions.count == 2
+            && callerBuilderModel.session(topicID: twoPairBuilder.topic.id)?.round == twoPairBuilder
+            && callerBuilderModel.session(topicID: hintedBuilder.topic.id)?.round.score == 1,
+            "mixed-topic Word Order scores and saved sessions remain isolated")
+        for origin in ["bank", "arranged"] {
+            var effective = beforeInvalidDrag
+            if origin == "bank" { effective.tapArranged(dragIDs[3]) }
+            let dropDefaultsName = suiteName + ".drop." + origin
+            let dropDefaults = UserDefaults(suiteName: dropDefaultsName)!
+            defer { dropDefaults.removePersistentDomain(forName: dropDefaultsName) }
+            _ = try SentenceBuilderSessionRepository(defaults: dropDefaults).save(effective)
+            let oldDropBytes = dropDefaults.data(forKey: SentenceBuilderSessionRepository.key)
+            var dropWrites = 0
+            let dropModel = SentenceBuilderSessionModel(repository:
+                SentenceBuilderSessionRepository(defaults: dropDefaults, writer: { bytes in
+                    dropWrites += 1
+                    if dropWrites == 1 { throw SentenceGameError.builderSessionWriteFailed }
+                    if let bytes { dropDefaults.set(bytes, forKey: SentenceBuilderSessionRepository.key) }
+                    else { dropDefaults.removeObject(forKey: SentenceBuilderSessionRepository.key) }
+                }))
+            var candidate = effective
+            check(candidate.dropTile("\(origin):\(dragIDs[3].uuidString)", before: dragIDs[0]),
+                  "\(origin) drop produces a changed save candidate")
+            let priorEffective = effective
+            var dropAudioEffects = 0
+            rejects("\(origin) drop save reports failure", expected: .builderSessionWriteFailed) {
+                try dropModel.save(candidate) {
+                    DispatchQueue.main.async { dropAudioEffects += 1 }
+                }
+                effective = candidate
+            }
+            var dropQueueDrained = false
+            DispatchQueue.main.async { dropQueueDrained = true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+            check(dropQueueDrained && dropAudioEffects == 0 && effective == priorEffective
+                && dropModel.sessions.map(\.round) == [priorEffective]
+                && dropModel.error?.contains("could not be saved") == true
+                && dropDefaults.data(forKey: SentenceBuilderSessionRepository.key) == oldDropBytes,
+                "\(origin) rejected drop preserves caller/session/bytes and queues no audio after drain")
+        }
+        twoPairBuilder.advance()
+        check(twoPairBuilder.index == 1 && twoPairBuilder.questions[0] == finalizedWrong.questions[0]
+            && twoPairBuilder.replayIDs.contains(originalQuestion.id),
+            "Next advances a wrong final answer while retaining arrangement and weak replay")
         let historyModel = SentenceRoundHistoryModel(repository: historyStore)
         check(historyModel.newestFirst.map(\.id) == [historyRecord.id], "history model loads saved records")
         var stageFlow = try SentenceRound(topic: first, mode: .stage)
@@ -358,7 +732,11 @@ struct SentenceGameChecks {
                     text: "English\tVietnamese\n\nBad\trow\textra")
         rejects("malformed paste") { _ = try SentenceTopic.parsePairs("English|Vietnamese") }
         rejects("extra columns") { _ = try SentenceTopic.parsePairs("a\tb\tc") }
-        for mode in SentenceMode.allCases {
+        check(SentenceMode.allCases == [.stage, .quick, .builder], "Builder is an explicit Sentence Game mode")
+        rejects("Builder cannot enter a four-choice round", expected: .builderRequiresTiles) {
+            _ = try SentenceRound(topic: first, mode: .builder)
+        }
+        for mode in [SentenceMode.stage, .quick] {
             var round = try SentenceRound(topic: first, mode: mode)
             check(round.questions.count == (mode == .stage ? 8 : 5), "mode count")
             check(Set(round.questions.map(\.id)).count == round.questions.count, "no repeated question")
@@ -415,6 +793,12 @@ struct SentenceGameChecks {
         check(narration.shouldAutoRead, "new questions auto-read in every mode")
         narration.enabled = false
         check(!narration.shouldAutoRead, "disabled narrator prevents auto")
+        check(narration.permitsRead(explicit: true) && !narration.permitsRead(explicit: false),
+            "explicit Word Order replay bypasses narrator toggle; automatic speech does not")
+        check(SentenceMode.builder.displayName == "Word Order"
+            && SentenceMode.builder.rawValue == "Sentence Builder"
+            && SentenceBuilderSessionRepository.key == "sentenceBuilderSessions.v1",
+            "visible mode renamed without changing Codable identity or archive key")
         narration.enabled = true
         let stale = narration.begin()
         narration.cancel()
@@ -476,6 +860,12 @@ struct SentenceGameChecks {
         check(!policy.permitsMusic && !policy.permitsEffects, "dismissal blocks effects after activation")
         policy.stage = true
         check(policy.musicVolume == 0 && !policy.permitsNarration, "background/exit speech end cannot resurrect music")
+        check(SentenceAudioTheme.defaultTheme == .gameshow
+            && SentenceAudioTheme.gameshow.musicVolumeScale == 1
+            && SentenceAudioTheme.gameshow.effectVolume == 0.55
+            && SentenceAudioTheme.gentle.musicVolumeScale < SentenceAudioTheme.gameshow.musicVolumeScale
+            && SentenceAudioTheme.gentle.effectVolume < SentenceAudioTheme.gameshow.effectVolume,
+            "gameshow remains the audio default and gentle theme attenuates playback")
         let reveal = SentenceRevealController()
         var callbacks = 0
         reveal.begin(delay: 1_000_000) { callbacks += 1 }
@@ -491,6 +881,18 @@ struct SentenceGameChecks {
         reveal.begin(delay: 1_000_000) { callbacks += 1 }
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         check(callbacks == 2, "fresh question cannot receive stale reveal")
+        let legacyWaveformHashes = [
+            ("music", "765cb555568d25ec6f3b26419752d28d02783f1cce4d803c342b5fcdb596c810"),
+            ("select", "9c153e938729eb743e6d1be61057929986bccb7b8187f94ef098fb66b0801024"),
+            ("suspense", "32ce12fa482b8c4127c451beeb9e85c812b0dea32257e24b0ae2fbe2b4a5a363"),
+            ("correct", "300b9aaba6556c8fa80c7719f5b4efd6dcda9de14170364741825f17f526ac17"),
+            ("incorrect", "529a996dd6b53f667cafbb981c2ef825ec44ee86d816a9b4a8398c1ff0da9759"),
+            ("finish", "6dc54ca638df8bd8ab73c53468807f60dc46eaa6eb36e9bffbde6f8f92160738")
+        ]
+        for (sound, expected) in zip(SentenceSound.allCases, legacyWaveformHashes) {
+            let digest = SHA256.hash(data: sound.wave()).map { String(format: "%02x", $0) }.joined()
+            check(digest == expected.1, "legacy \(expected.0) waveform bytes remain unchanged")
+        }
         for sound in SentenceSound.allCases {
             let bytes = sound.wave()
             check(String(data: bytes.prefix(4), encoding: .ascii) == "RIFF" && String(data: bytes.subdata(in: 8..<12), encoding: .ascii) == "WAVE", "original PCM WAV header")
@@ -536,6 +938,29 @@ struct SentenceGameChecks {
             }
             check(bytes == sound.wave(), "deterministic original synthesis")
         }
+        var gentleWaveforms = Set<Data>()
+        for sound in WordOrderSound.allCases {
+            let bytes = sound.wave()
+            let samples = pcmSamples(bytes)
+            let expectedSamples = Int(22_050 * sound.noteDuration) * sound.notes.count
+            check(String(data: bytes.prefix(4), encoding: .ascii) == "RIFF"
+                && String(data: bytes.subdata(in: 8..<12), encoding: .ascii) == "WAVE"
+                && Int(UInt32(bytes[4]) | (UInt32(bytes[5]) << 8) | (UInt32(bytes[6]) << 16) | (UInt32(bytes[7]) << 24)) == bytes.count - 8
+                && Int(UInt32(bytes[40]) | (UInt32(bytes[41]) << 8) | (UInt32(bytes[42]) << 16) | (UInt32(bytes[43]) << 24)) == samples.count * 2
+                && samples.count == expectedSamples,
+                "gentle \(sound) has a complete, correctly sized PCM RIFF")
+            check(samples.allSatisfy { $0.isFinite && abs($0) < 0.25 }
+                && samples.contains { $0 > 0.01 } && samples.contains { $0 < -0.01 },
+                "gentle \(sound) is finite and unclipped")
+            let rms = waveformRMS(bytes)
+            check(bytes.count < 400_000 && rms > 0.005 && rms < 0.12,
+                "gentle \(sound) duration and RMS stay in the intended range")
+            check(gentleWaveforms.insert(bytes).inserted && bytes == sound.wave(),
+                "gentle \(sound) has a distinct deterministic waveform")
+        }
+        check(WordOrderSound.check.wave().count < SentenceSound.suspense.wave().count
+            && waveformRMS(WordOrderSound.check.wave()) < waveformRMS(SentenceSound.suspense.wave()),
+            "gentle Check is shorter and quieter than legacy suspense")
         print("Passed \(count) sentence game checks")
     }
 

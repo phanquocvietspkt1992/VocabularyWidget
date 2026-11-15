@@ -21,6 +21,8 @@ Findings first, ordered by severity, with path and reproduction. Return PASS, FA
 
 Match verification depth to impact, not diff size. A low-risk change still needs its direct check; high-risk persistence, cross-process, audio, or App Intent changes need relevant failure and runtime boundaries. Do not skip required acceptance criteria to save tokens.
 
+Challenge the UX criteria and [AGENTS.md](../../AGENTS.md) feedback before closing UI work: compact essentials, short labels, legible contrast, stable bank slots, rejected controls absent, and protected modes unchanged. Verify render evidence against production source hashes and the same seeded question across states. Rendered frames do not prove drag gestures or pleasant audio; report each evidence level separately.
+
 Return only:
 
 ```text
