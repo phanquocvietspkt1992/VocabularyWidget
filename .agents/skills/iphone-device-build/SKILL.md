@@ -34,6 +34,7 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 - Determine N from the last evidenced successful physical-iPhone installation AND launch: the next deployment on that same local day increments N by one; a new local day starts at 1. Verify the deployed metadata and success logs, not just the current source settings. If that evidence is missing or ambiguous, resolve it before choosing a counter.
 - Preparing or compiling a build does not consume N. Failed build/install/launch attempts retain the pending N for same-day retries; only a successful installation plus launch consumes it. If the local day changes before retrying, prepare the new date with N=1.
 - Successful physical deployment: `2026.11.15` / `1` (`15.11.2026.1`) on PQV IPhone (iPhone 17 Pro Max, UDID `00008150-000215C11E12401C`). Release build, signing, host/extension metadata and App Group entitlements, in-place installation, and `devicectl` launch all succeeded on 2026-11-15 (+07). Evidence: `/private/tmp/VocabularyWidgetBuilds/iphone-20261115-hOqzvJ/` contains `xcodebuild.log`, `install.log`, `launch.log`, and signed derived-data. The next successful deployment on the same local day uses build `2`; a new local day starts at `1`.
+- Pending physical deployment: `2026.11.15` / `2` (`15.11.2026.2`) on PQV IPhone (UDID `00008150-000215C11E12401C`). Signed Release build and in-place installation succeeded, but iOS rejected launch because the phone was locked. Counter `2` is not consumed; after unlocking, retry launch for this installed build without rebuilding. Evidence: `/private/tmp/VocabularyWidgetBuilds/iphone-20261115-nOQkJn/` (`xcodebuild.log`, `install.log`, `launch.log`, signed derived-data).
 - Before installation, verify the built host and embedded extension plists both contain the prepared `CFBundleShortVersionString` and `CFBundleVersion`; settings or an unsigned compile alone are not deployment evidence.
 
 ### Last observed configuration (verify before reuse)
@@ -49,6 +50,12 @@ description: "Build, sign, install, and launch the native VocabularyWidget app o
 - If a build fails, identify the first actionable diagnostic and classify it as a source, configuration/signing, or toolchain/environment failure. Keep compilation, signing, device availability, installation, and launch outcomes distinct.
 - For behavior that reproduces only on a physical device—especially audio, App Intents, or background execution—capture a persistent device-side log before changing behavior. Copy the log from the device with `devicectl device copy from` and preserve it with the build evidence.
 - Group device log events by `pid` and record how each process was launched (widget intent cold launch, user opening the app, or `devicectl` launch). These paths can behave differently. For widget audio checks, install the app and test by invoking the widget; do not launch the app with `devicectl process launch` first.
+
+## MCP workflow
+
+This workspace provides a local `vocabularywidget-iphone-deploy` MCP server in `tools/iphone-deploy-mcp/`, registered through `.vscode/mcp.json`. When available, use `iphone_preflight`, `iphone_build`, `iphone_install`, and `iphone_launch` in that order; use `iphone_deployment_status` to inspect the recorded result. `iphone_install` and `iphone_launch` are separate so a failed launch can be retried without rebuilding or consuming the counter. The server verifies the signing team, identifiers, App Group, built signatures and version metadata, keeps logs outside the source tree, and records the counter only after launch succeeds. Automatic provisioning may contact Apple.
+
+Set it up with `npm install` from `tools/iphone-deploy-mcp/`, then reload VS Code. If the MCP server is unavailable, follow the manual commands below and keep this skill's verification gates unchanged.
 
 ## 2. Build and sign
 

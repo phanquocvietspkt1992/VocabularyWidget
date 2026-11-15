@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "vocabularywidget-iphone-deploy": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/tools/iphone-deploy-mcp/server.mjs"]
+    }
+  }
+}
